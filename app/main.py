@@ -42,13 +42,13 @@ def _ctx(request, **extra):
 # ------------------------------------------------------------------ dashboard
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
-    return templates.TemplateResponse("index.html", _ctx(request))
+    return templates.TemplateResponse(request, "index.html", _ctx(request))
 
 
 # ------------------------------------------------------------------ Construct
 @app.get("/construct", response_class=HTMLResponse)
 def construct_get(request: Request, msg: str = ""):
-    return templates.TemplateResponse("construct.html", _ctx(
+    return templates.TemplateResponse(request, "construct.html", _ctx(
         request, schema=schema, opts=constraints.effective_options(),
         payloads=[os.path.basename(p) for p in services.list_payloads()],
         decks=[os.path.basename(d) for d in services.list_decks()],
@@ -110,7 +110,7 @@ def subsectors(sector: str):
 @app.get("/map", response_class=HTMLResponse)
 def map_get(request: Request):
     report = config.MAPPING_REPORT.read_text(encoding="utf-8") if config.MAPPING_REPORT.exists() else ""
-    return templates.TemplateResponse("map.html", _ctx(request, report=report))
+    return templates.TemplateResponse(request, "map.html", _ctx(request, report=report))
 
 
 @app.post("/map/run")
@@ -122,7 +122,7 @@ def map_run(request: Request):
 # ------------------------------------------------------------------ Reconstruct
 @app.get("/reconstruct", response_class=HTMLResponse)
 def reconstruct_get(request: Request, msg: str = ""):
-    return templates.TemplateResponse("reconstruct.html", _ctx(
+    return templates.TemplateResponse(request, "reconstruct.html", _ctx(
         request, schema=schema, opts=constraints.effective_options(),
         payloads=[os.path.basename(p) for p in services.list_payloads()],
         outputs=[os.path.basename(o) for o in services.list_outputs()],
@@ -147,7 +147,7 @@ async def reconstruct_run(request: Request):
 # ------------------------------------------------------------------ Diff
 @app.get("/diff", response_class=HTMLResponse)
 def diff_get(request: Request):
-    return templates.TemplateResponse("diff.html", _ctx(
+    return templates.TemplateResponse(request, "diff.html", _ctx(
         request,
         pairs=services.suggest_diff_pairs(),
         decks=[os.path.basename(d) for d in services.list_decks()],
@@ -158,7 +158,7 @@ def diff_get(request: Request):
 @app.post("/diff/run", response_class=HTMLResponse)
 def diff_run(request: Request, original: str = Form(...), rebuilt: str = Form(...)):
     res = services.run_diff(original, rebuilt)
-    return templates.TemplateResponse("diff.html", _ctx(
+    return templates.TemplateResponse(request, "diff.html", _ctx(
         request,
         pairs=services.suggest_diff_pairs(),
         decks=[os.path.basename(d) for d in services.list_decks()],

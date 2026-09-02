@@ -5,7 +5,7 @@
 data/master/*.pptx
 data/decks/*.pptx
 data/output/*.pptx
-#data/payloads/*.json
+data/payloads/*.json
 data/mapping/*
 scripts/generate_public_audit_template_2026.py
 
