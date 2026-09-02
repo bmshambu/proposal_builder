@@ -95,7 +95,7 @@ def construct(payload_path, email=None):
     start = time.time()
 
     cmd = config.generate_command(sys.executable, payload_path,
-                                  email or config.DEFAULT_EMAIL)
+                                  email or config.default_email())
     ok, out, err = _run(cmd, cwd=str(config.GENERATE_CWD),
                         env=config.subprocess_env())
     log = "$ (cwd=%s) %s\n\n[exit ok: %s]\n\n[stdout]\n%s\n[stderr]\n%s" % (

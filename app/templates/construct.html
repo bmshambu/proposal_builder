@@ -23,9 +23,10 @@ You can still save payloads; generation is disabled until you add it.</div>
 
 <form method="post" action="/construct/run" class="card">
   {% include "_payload_form.html" %}
-  <label>Your email (for Templafy)
-    <input name="email" placeholder="you@kpmg.com">
-  </label>
+  <p class="hint">Doc-gen runs as
+    <b>{{ default_email }}</b>{% if default_email == 'you@kpmg.com' %}
+    <span class="bad">← set <code>PROPOSAL_EMAIL</code> in .env to your real Templafy email</span>{% else %}
+    (from <code>PROPOSAL_EMAIL</code> in .env){% endif %}.</p>
   <div class="actions">
     <button class="btn" type="submit" name="generate" value="0">Save payload</button>
     <button class="btn primary" type="submit" name="generate" value="1"
@@ -38,7 +39,6 @@ You can still save payloads; generation is disabled until you add it.</div>
   <form method="post" action="/construct/generate-all" class="batchform">
     <span class="batchlabel"><b>Batch generate</b> — one deck per saved payload</span>
     <label class="chk"><input type="checkbox" name="only_missing" value="1" checked> only missing</label>
-    <input name="email" placeholder="you@kpmg.com">
     <button class="btn primary" {% if not script_present %}disabled{% endif %}>Generate all</button>
   </form>
   <p class="hint">Runs sequentially and the page waits until done (fine for ~10–20

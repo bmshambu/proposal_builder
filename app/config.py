@@ -33,7 +33,6 @@ LAST_LOG = DATA / "last_generation.log"      # stdout/stderr of the most recent 
 GENERATE_SCRIPT = pathlib.Path(
     os.environ.get("GENERATE_SCRIPT",
                    SCRIPTS_DIR / "generate_public_audit_template_2026.py"))
-DEFAULT_EMAIL = os.environ.get("PROPOSAL_EMAIL", "you@kpmg.com")
 
 # The script is run from GENERATE_CWD (the scripts/ folder, where you placed
 # .env) so its relative paths / dotenv behave exactly like running it standalone.
@@ -77,3 +76,10 @@ def subprocess_env():
     for p in (ROOT / ".env", SCRIPTS_DIR / ".env"):
         env.update(_parse_env_file(p))
     return env
+
+
+def default_email():
+    """The Templafy user email used for doc-gen. Set PROPOSAL_EMAIL in .env
+    (repo root or scripts/) to your real Templafy login email. The UI email
+    field overrides this per run when filled."""
+    return subprocess_env().get("PROPOSAL_EMAIL") or "you@kpmg.com"

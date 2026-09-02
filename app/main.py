@@ -53,7 +53,7 @@ def construct_get(request: Request, msg: str = ""):
         request, schema=schema, opts=constraints.effective_options(),
         payloads=[os.path.basename(p) for p in services.list_payloads()],
         decks=[os.path.basename(d) for d in services.list_decks()],
-        last_log=last_log, msg=msg))
+        default_email=config.default_email(), last_log=last_log, msg=msg))
 
 
 @app.post("/construct/sync-constraints")
