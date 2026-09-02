@@ -19,7 +19,7 @@ TEXT_FIELDS = {
 
 # --- single-choice (enum) fields --------------------------------------------
 AUDIT_TAX_OPTIONS = ["Audit only", "Audit and Tax"]   # verify 2nd against --list-constraints
-NEW_CLIENT_OPTIONS = ["New audit client", "Expansion of Services"]
+NEW_CLIENT_OPTIONS = ["New Audit Client", "Expansion of Services"]
 
 SECTORS = [
     "Asset Management", "Banking & Capital Markets", "Consumer & Retail",
@@ -80,10 +80,10 @@ BOOLEAN_FIELDS = {
 }
 
 # --- fixed / compliance fields ----------------------------------------------
+# Note: "Accept" and "Springboard_ID" are intentionally omitted — the script
+# does not require them.
 FIXED_FIELDS = {
     "I agree to comply with these policies": "Accept",
-    "Accept": "Accept",
-    "Springboard_ID": "",
 }
 
 
