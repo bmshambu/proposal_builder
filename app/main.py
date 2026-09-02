@@ -48,11 +48,12 @@ def index(request: Request):
 # ------------------------------------------------------------------ Construct
 @app.get("/construct", response_class=HTMLResponse)
 def construct_get(request: Request, msg: str = ""):
+    last_log = config.LAST_LOG.read_text(encoding="utf-8") if config.LAST_LOG.exists() else ""
     return templates.TemplateResponse(request, "construct.html", _ctx(
         request, schema=schema, opts=constraints.effective_options(),
         payloads=[os.path.basename(p) for p in services.list_payloads()],
         decks=[os.path.basename(d) for d in services.list_decks()],
-        msg=msg))
+        last_log=last_log, msg=msg))
 
 
 @app.post("/construct/sync-constraints")

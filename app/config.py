@@ -25,6 +25,7 @@ MASTER_PPTX = pathlib.Path(os.environ.get("MASTER_PPTX", MASTER_DIR / "master.pp
 MAPPING_SPEC = MAPPING_DIR / "mapping_spec.json"
 MAPPING_REPORT = MAPPING_DIR / "mapping_report.md"
 TOKEN_MAP = DATA / "token_map.json"          # optional {find_text: payload_field}
+LAST_LOG = DATA / "last_generation.log"      # stdout/stderr of the most recent run
 
 # --- Templafy generation script (yours, dropped into scripts/) ---------------
 # The Construct stage shells out to this. Adjust GENERATE_SCRIPT / GENERATE_ARGS
@@ -34,12 +35,45 @@ GENERATE_SCRIPT = pathlib.Path(
                    SCRIPTS_DIR / "generate_public_audit_template_2026.py"))
 DEFAULT_EMAIL = os.environ.get("PROPOSAL_EMAIL", "you@kpmg.com")
 
-# Argument template for one generation run. {py} {script} {email} {data} {outdir}
-# are substituted. Everything is passed as a list (no shell) for safety.
-def generate_command(python_exe, payload_path, outdir, email):
+# The script is run from GENERATE_CWD (the scripts/ folder, where you placed
+# .env) so its relative paths / dotenv behave exactly like running it standalone.
+GENERATE_CWD = SCRIPTS_DIR
+
+# Command for one generation run. Matches the script's documented basic usage
+# (--email --data). We deliberately do NOT pass --output-dir: the script writes
+# the .pptx to its working dir, and services.construct() auto-detects and moves
+# it into data/decks/. Add flags here only if your script needs them.
+def generate_command(python_exe, payload_path, email):
     return [
         python_exe, str(GENERATE_SCRIPT),
         "--email", email,
         "--data", str(payload_path),
-        "--output-dir", str(outdir),
     ]
+
+
+def _parse_env_file(path):
+    """Minimal KEY=VALUE .env parser (no dependency). Returns a dict."""
+    out = {}
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.strip()
+            v = v.strip().strip('"').strip("'")
+            if k:
+                out[k] = v
+    except OSError:
+        pass
+    return out
+
+
+def subprocess_env():
+    """os.environ merged with any .env found at the repo root and in scripts/,
+    so TEMPLAFY_BASE_URL / TEMPLAFY_TOKEN reach the script regardless of cwd or
+    which folder the .env lives in (scripts/.env wins if both exist)."""
+    env = dict(os.environ)
+    for p in (ROOT / ".env", SCRIPTS_DIR / ".env"):
+        env.update(_parse_env_file(p))
+    return env

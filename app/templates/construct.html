@@ -77,6 +77,15 @@ You can still save payloads; generation is disabled until you add it.</div>
       <a href="/map">Map</a>.</p>
   </section>
 </div>
+
+{% if last_log %}
+<section class="card">
+  <details {% if 'FAILED' in msg or '[exit ok: False]' in last_log %}open{% endif %}>
+    <summary><b>Last generation log</b> (stdout / stderr of the most recent run)</summary>
+    <pre class="report">{{ last_log }}</pre>
+  </details>
+</section>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}<script src="/static/subsectors.js"></script>{% endblock %}

@@ -13,11 +13,11 @@ from . import config
 
 
 # ---------------------------------------------------------------- helpers
-def _run(cmd, cwd=None, timeout=1800):
+def _run(cmd, cwd=None, env=None, timeout=1800):
     """Run a subprocess, capture output. Returns (ok, stdout, stderr)."""
     try:
-        p = subprocess.run(cmd, cwd=cwd or str(config.ROOT), capture_output=True,
-                           text=True, timeout=timeout)
+        p = subprocess.run(cmd, cwd=cwd or str(config.ROOT), env=env,
+                           capture_output=True, text=True, timeout=timeout)
         return p.returncode == 0, p.stdout, p.stderr
     except Exception as e:
         return False, "", str(e)
@@ -50,37 +50,72 @@ def read_payload(path):
 
 
 # ---------------------------------------------------------------- Construct
+def _pptx_snapshot(dirs):
+    """Map of .pptx path -> mtime, scanned recursively across several dirs.
+    Skips virtualenvs and the (large, static) master so they never show up as
+    freshly-generated candidates."""
+    snap = {}
+    master = os.path.abspath(config.MASTER_PPTX)
+    patterns = [os.path.join(str(config.ROOT), "*.pptx")]  # repo root, flat
+    for d in dirs:
+        patterns.append(os.path.join(str(d), "**", "*.pptx"))  # recursive
+    for pat in patterns:
+        for f in glob.glob(pat, recursive=True):
+            af = os.path.abspath(f)
+            if af == master or af in snap:
+                continue
+            if os.sep + ".venv" + os.sep in af or os.sep + "venv" + os.sep in af:
+                continue
+            try:
+                snap[af] = os.path.getmtime(f)
+            except OSError:
+                pass
+    return snap
+
+
 def construct(payload_path, email=None):
     """Call the user's Templafy generation script for one payload.
 
-    The script writes a .pptx into DECKS_DIR; we then rename the newest .pptx to
-    match the payload stem so Map can pair them automatically.
+    The script's basic usage doesn't take --output-dir, so it may write the .pptx
+    to the working directory rather than DECKS_DIR. We therefore watch several
+    locations for a new/updated .pptx and move it into DECKS_DIR, named to match
+    the payload stem so Map can pair them automatically. Full stdout/stderr is
+    saved to config.LAST_LOG so failures are visible in the UI.
     """
     if not config.GENERATE_SCRIPT.exists():
-        return {"ok": False, "log": "Generation script not found at %s. Drop your "
-                "generate_public_audit_template_2026.py into scripts/."
-                % config.GENERATE_SCRIPT}
+        log = ("Generation script not found at %s. Drop your "
+               "generate_public_audit_template_2026.py into scripts/."
+               % config.GENERATE_SCRIPT)
+        config.LAST_LOG.write_text(log, encoding="utf-8")
+        return {"ok": False, "log": log, "deck": None}
 
     stem = os.path.splitext(os.path.basename(payload_path))[0]
-    before = set(list_decks())
-    cmd = config.generate_command(sys.executable, payload_path,
-                                  config.DECKS_DIR, email or config.DEFAULT_EMAIL)
-    ok, out, err = _run(cmd)
-    log = "$ %s\n\n%s\n%s" % (" ".join(cmd), out, err)
+    watch_dirs = [config.SCRIPTS_DIR, config.DECKS_DIR, config.OUTPUT_DIR]
+    before = _pptx_snapshot(watch_dirs)
+    start = time.time()
 
+    cmd = config.generate_command(sys.executable, payload_path,
+                                  email or config.DEFAULT_EMAIL)
+    ok, out, err = _run(cmd, cwd=str(config.GENERATE_CWD),
+                        env=config.subprocess_env())
+    log = "$ (cwd=%s) %s\n\n[exit ok: %s]\n\n[stdout]\n%s\n[stderr]\n%s" % (
+        config.GENERATE_CWD, " ".join(cmd), ok, out or "(none)", err or "(none)")
+    config.LAST_LOG.write_text(log, encoding="utf-8")
+
+    # find a .pptx that is new or was modified during the run, anywhere we watch
+    after = _pptx_snapshot(watch_dirs)
+    candidates = [f for f, m in after.items()
+                  if m >= start - 1 and (f not in before or m > before.get(f, 0))]
     new_deck = None
-    after = set(list_decks()) - before
-    if after:
-        newest = max(after, key=os.path.getmtime)
-        target = str(config.DECKS_DIR / (stem + ".pptx"))
+    if candidates:
+        newest = max(candidates, key=lambda f: after[f])
+        target = os.path.abspath(config.DECKS_DIR / (stem + ".pptx"))
         if newest != target:
             try:
                 os.replace(newest, target)
-                new_deck = target
             except OSError:
-                new_deck = newest
-        else:
-            new_deck = newest
+                target = newest
+        new_deck = target
     return {"ok": ok and new_deck is not None, "log": log, "deck": new_deck}
 
 
