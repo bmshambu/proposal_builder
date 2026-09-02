@@ -18,6 +18,44 @@
 
 ---
 
+---
+
+## 1b. UPDATE — Investigation results (from a real generated deck)
+
+Running the inspector on a real 61-slide generated deck (`01_audit_only_new_tech_software.pptx`) confirmed the mechanism and revealed the content sources. **It is a hybrid**, and — crucially — the assembly is **"superset master + delete", not "empty template + insert".**
+
+**Evidence:**
+- **Superset + delete:** `docProps/app.xml` reports **Slides: 265** while the package contains **61**. Templafy starts from the ~265-slide master and **deletes the slides the payload didn't select**. *(We now have the 265-slide master in hand — this is the source of truth.)*
+- **Dynamics bindings are white-box:** `datasource` appears in `customXml/item118/124/126`, `binding` in `item27/30/31/33/35/38`, `assetid` in `item126` + `slide12.xml.rels`. **Those XML parts literally contain the answer→content lookup tables and rules** — we can read them directly rather than only inferring from examples.
+- **External systems in the loop:** `connector` (47 parts), `sharepoint` (13), `dam` (6), plus `ContentTypeId` in custom.xml. Several media files are **0 KB = externally linked images** (pulled from SharePoint/DAM, not embedded).
+- **Profile injection:** `profile` in custom.xml + slide33/slide36 (author/contact from the Templafy user profile).
+- **Post-processing:** deck carries a **Microsoft sensitivity label** (`MSIP_Label … = Internal`) and was run through **NXPowerLite** compression. Our headless builder must re-apply the sensitivity label.
+
+**Implication:** the replacement engine is mostly **(a) a selection rule over the 265-slide master + (b) token injection (client/date/profile) + (c) linked-asset resolution** — all replicable in free Python. The only genuine external dependency is the DAM/SharePoint-linked assets.
+
+---
+
+## 1c. Current approach — Extract + Diff + Harvest (refined from "run all variations")
+
+The team's instinct (generate many payload→deck pairs and learn the mapping) is sound. Two upgrades make it far cheaper and more reliable:
+
+1. **White-box first:** the rules are already in the master's `customXml` (`item118/124/126` = data sources; `item27/30…` = bindings). Extract them; use input/output inference only as a cross-check.
+2. **Spanning set, not exhaustive:** vary **one payload field at a time** (OFAT) instead of enumerating every combination. ~15–25 targeted payloads teach more than hundreds of random ones.
+
+**Must-do test:** generate the **same payload twice and diff the two decks.** Identical → content is deterministic/curated (harvestable). Different body text → there is an LLM step to reproduce separately. *This single test decides whether the builder needs an AI component.*
+
+**The pipeline (current step = 2–4):**
+1. **Extract** — parse each deck's customXml → data sources, bindings, asset IDs (the actual rules).
+2. **Diff** — match every generated slide back to its master origin; record which master slides each payload kept vs. dropped. → `map_decks.py`
+3. **Correlate** — for each master slide, is it *always kept* or *conditional on field=value*? Detect injected tokens. → `map_decks.py`
+4. **Map** — one machine-readable `mapping_spec.json`, refined incrementally as more pairs are added.
+5. **Harvest** — the generated decks + the 265 master ARE the content library; no separate Slides-Library access needed.
+6. **Assemble (headless Python)** — new payload → mapping spec → select master slides → inject tokens → resolve linked images → re-apply theme + sensitivity label → output `.pptx`.
+
+**Risks to plan around:** external DAM/SharePoint-linked assets (may need those integrations or embed-on-harvest); determinism (pending the twice-run test); sensitivity-label re-stamping; contractual/ToS check on reverse-engineering a licensed tool's output (worth confirming with the contract owner — not a blocker for an internal POC).
+
+---
+
 ## 2. How Templafy builds a branded deck (the mechanism to replicate)
 
 Five moving parts:
@@ -160,6 +198,37 @@ Run it on **both** the raw template and a generated deck, and compare — the *d
 
 ---
 
+## 11. How to run the mapper (`map_decks.py`) — current step
+
+Requires only **Python 3.8+** (standard library). Keep `pptx_forensics.py` in the same folder.
+
+Layout your files like this:
+```
+master_265.pptx
+decks/     01_audit.pptx, 02_advisory.pptx, ...   (the generated decks)
+payloads/  01_audit.json, 02_advisory.json, ...   (the REST payloads used)
+```
+Name each payload with the **same stem** as its deck so they auto-pair (or pass `--manifest pairs.csv` with a `pptx,payload` header).
+
+```bash
+python map_decks.py --master master_265.pptx --decks ./decks --payloads ./payloads --out ./mapping
+```
+
+Outputs to `./mapping/`:
+- **`mapping_report.md`** — human summary: match quality, which master slides are *always kept* / *conditional on a field* / *unclear*, and detected injected tokens.
+- **`mapping_spec.json`** — machine-readable rules to feed the future assembler.
+
+**How to read it:**
+- **Check "Match quality" first.** Slides matched *via creationId* are reliable. Lots of low-confidence/text-only matches ⇒ those master shapes lack creationIds; inspect them by hand.
+- **"Always kept"** = your static skeleton. **"Conditional"** with **high** confidence = a real selection rule (e.g. `serviceLine=audit` keeps slides X–Y). **"Unclear"** = add more OFAT payloads to resolve.
+- Cross-check the inferred conditional rules against the master's `customXml` data sources (`item118/124/126`) — those are authoritative.
+
+**Iterate:** add more (payload, deck) pairs and re-run — the spec sharpens each time. This is the "keep running, logic updates" loop.
+
+---
+
 ### Appendix — files in this drop
 - `templafy_findings_and_phase0.md` — this document.
-- `inspect_pptx.py` — the zero‑dependency, read‑only OOXML inspector (usage in §6).
+- `inspect_pptx.py` — zero‑dependency, read‑only OOXML inspector (usage in §6).
+- `pptx_forensics.py` — shared, read‑only parsing library (imported by the mapper).
+- `map_decks.py` — the payload→deck mapper that learns selection + token rules (usage in §11).

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Proposal Builder{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Proposal Builder <span class="tag">POC</span></div>
+    <nav class="stages">
+      <a href="/construct" class="stage {% if request.url.path.startswith('/construct') %}active{% endif %}">
+        <span class="num">1</span> Construct</a>
+      <span class="arrow">&rarr;</span>
+      <a href="/map" class="stage {% if request.url.path.startswith('/map') %}active{% endif %}">
+        <span class="num">2</span> Map</a>
+      <span class="arrow">&rarr;</span>
+      <a href="/reconstruct" class="stage {% if request.url.path.startswith('/reconstruct') %}active{% endif %}">
+        <span class="num">3</span> Reconstruct</a>
+      <span class="arrow">&rarr;</span>
+      <a href="/diff" class="stage {% if request.url.path.startswith('/diff') %}active{% endif %}">
+        <span class="num">4</span> Diff</a>
+    </nav>
+    <a href="/" class="home-link">Dashboard</a>
+  </header>
+
+  {% block banner %}{% endblock %}
+
+  <main class="container">
+    {% if msg %}<div class="flash">{{ msg }}</div>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="foot">
+    Local POC &middot; deterministic superset&rarr;delete engine &middot; no data leaves this machine
+  </footer>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

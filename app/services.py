@@ -1,0 +1,197 @@
+"""Orchestration for the three stages: Construct -> Map -> Reconstruct.
+
+Keeps the web layer thin: main.py calls these functions.
+"""
+import glob
+import json
+import os
+import subprocess
+import sys
+import time
+
+from . import config
+
+
+# ---------------------------------------------------------------- helpers
+def _run(cmd, cwd=None, timeout=1800):
+    """Run a subprocess, capture output. Returns (ok, stdout, stderr)."""
+    try:
+        p = subprocess.run(cmd, cwd=cwd or str(config.ROOT), capture_output=True,
+                           text=True, timeout=timeout)
+        return p.returncode == 0, p.stdout, p.stderr
+    except Exception as e:
+        return False, "", str(e)
+
+
+def list_payloads():
+    return sorted(glob.glob(str(config.PAYLOADS_DIR / "*.json")))
+
+
+def list_decks():
+    return sorted(glob.glob(str(config.DECKS_DIR / "*.pptx")))
+
+
+def list_outputs():
+    return sorted(glob.glob(str(config.OUTPUT_DIR / "*.pptx")))
+
+
+def save_payload(name, payload):
+    """Write payload json to data/payloads/<name>.json. Returns path."""
+    safe = "".join(c for c in name if c.isalnum() or c in ("-", "_")).strip("_") or "payload"
+    path = config.PAYLOADS_DIR / (safe + ".json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2)
+    return str(path)
+
+
+def read_payload(path):
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+# ---------------------------------------------------------------- Construct
+def construct(payload_path, email=None):
+    """Call the user's Templafy generation script for one payload.
+
+    The script writes a .pptx into DECKS_DIR; we then rename the newest .pptx to
+    match the payload stem so Map can pair them automatically.
+    """
+    if not config.GENERATE_SCRIPT.exists():
+        return {"ok": False, "log": "Generation script not found at %s. Drop your "
+                "generate_public_audit_template_2026.py into scripts/."
+                % config.GENERATE_SCRIPT}
+
+    stem = os.path.splitext(os.path.basename(payload_path))[0]
+    before = set(list_decks())
+    cmd = config.generate_command(sys.executable, payload_path,
+                                  config.DECKS_DIR, email or config.DEFAULT_EMAIL)
+    ok, out, err = _run(cmd)
+    log = "$ %s\n\n%s\n%s" % (" ".join(cmd), out, err)
+
+    new_deck = None
+    after = set(list_decks()) - before
+    if after:
+        newest = max(after, key=os.path.getmtime)
+        target = str(config.DECKS_DIR / (stem + ".pptx"))
+        if newest != target:
+            try:
+                os.replace(newest, target)
+                new_deck = target
+            except OSError:
+                new_deck = newest
+        else:
+            new_deck = newest
+    return {"ok": ok and new_deck is not None, "log": log, "deck": new_deck}
+
+
+def construct_all(email=None, only_missing=True):
+    """Generate a deck for every saved payload. Skips payloads that already have
+    a matching deck when only_missing is True (avoids re-spending Templafy calls).
+    Returns a summary dict."""
+    existing = {os.path.splitext(os.path.basename(d))[0] for d in list_decks()}
+    out = {"generated": [], "skipped": [], "failed": []}
+    for p in list_payloads():
+        stem = os.path.splitext(os.path.basename(p))[0]
+        if only_missing and stem in existing:
+            out["skipped"].append(stem)
+            continue
+        res = construct(p, email=email)
+        (out["generated"] if res["ok"] else out["failed"]).append(stem)
+    return out
+
+
+# ---------------------------------------------------------------- Map
+def run_map():
+    """Run map_decks.py over all payloads + decks; return the report text."""
+    if not config.MASTER_PPTX.exists():
+        return {"ok": False, "log": "Master template missing at %s. Put your "
+                "265-slide master there (or set MASTER_PPTX)." % config.MASTER_PPTX}
+    cmd = [sys.executable, str(config.ROOT / "map_decks.py"),
+           "--master", str(config.MASTER_PPTX),
+           "--decks", str(config.DECKS_DIR),
+           "--payloads", str(config.PAYLOADS_DIR),
+           "--out", str(config.MAPPING_DIR)]
+    ok, out, err = _run(cmd)
+    report = ""
+    if config.MAPPING_REPORT.exists():
+        report = open(config.MAPPING_REPORT, encoding="utf-8").read()
+    return {"ok": ok, "log": out + "\n" + err, "report": report}
+
+
+def load_spec():
+    if config.MAPPING_SPEC.exists():
+        return json.load(open(config.MAPPING_SPEC, encoding="utf-8"))
+    return None
+
+
+def spec_summary():
+    """Quick counts for the UI (always/conditional/unclear/never)."""
+    spec = load_spec()
+    if not spec:
+        return None
+    counts = {"always": 0, "conditional": 0, "unclear": 0, "never_used": 0}
+    for r in spec.get("selection_rules", {}).values():
+        counts[r.get("rule", "unclear")] = counts.get(r.get("rule", "unclear"), 0) + 1
+    return {"master_slides": spec.get("master", {}).get("slides"),
+            "payloads": spec.get("payload_count"), "counts": counts}
+
+
+# ---------------------------------------------------------------- Reconstruct
+def reconstruct(payload_path):
+    """Rebuild a deck for a payload from the mapping spec + master (no Templafy)."""
+    import reconstruct as rc  # engine module at repo root
+
+    spec = load_spec()
+    if not spec:
+        return {"ok": False, "log": "No mapping_spec.json yet - run the Map stage first."}
+    if not config.MASTER_PPTX.exists():
+        return {"ok": False, "log": "Master template missing at %s." % config.MASTER_PPTX}
+
+    payload = read_payload(payload_path)
+    token_map = {}
+    if config.TOKEN_MAP.exists():
+        token_map = json.load(open(config.TOKEN_MAP, encoding="utf-8"))
+
+    stem = os.path.splitext(os.path.basename(payload_path))[0]
+    out_path = str(config.OUTPUT_DIR / (stem + "_rebuilt.pptx"))
+    try:
+        res = rc.build(str(config.MASTER_PPTX), spec, payload, out_path,
+                       token_map=token_map, verbose=False)
+        log = ("Kept %d slides, dropped %d, tokens injected on %d slides.\n"
+               % (len(res["kept"]), res["dropped_count"], res["tokens_applied"]))
+        if res["warnings"]:
+            log += "Warnings:\n" + "\n".join(" - " + w for w in res["warnings"])
+        return {"ok": True, "log": log, "out": out_path,
+                "kept": res["kept"], "warnings": res["warnings"]}
+    except Exception as e:
+        return {"ok": False, "log": "Reconstruct failed: %s" % e}
+
+
+# ---------------------------------------------------------------- Diff
+def suggest_diff_pairs():
+    """Pair each rebuilt deck (output/<stem>_rebuilt.pptx) with its original
+    (decks/<stem>.pptx) when both exist."""
+    decks = {os.path.splitext(os.path.basename(d))[0]: d for d in list_decks()}
+    pairs = []
+    for o in list_outputs():
+        base = os.path.basename(o)
+        stem = os.path.splitext(base)[0]
+        if stem.endswith("_rebuilt"):
+            stem = stem[:-len("_rebuilt")]
+        if stem in decks:
+            pairs.append({"stem": stem,
+                          "original": os.path.basename(decks[stem]),
+                          "rebuilt": base})
+    return pairs
+
+
+def run_diff(original_name, rebuilt_name):
+    import diff_decks as dd
+    original = str(config.DECKS_DIR / original_name)
+    rebuilt = str(config.OUTPUT_DIR / rebuilt_name)
+    if not os.path.exists(original) or not os.path.exists(rebuilt):
+        return {"ok": False, "log": "Pick one original (decks/) and one rebuilt (output/) deck."}
+    try:
+        return {"ok": True, "result": dd.diff(original, rebuilt)}
+    except Exception as e:
+        return {"ok": False, "log": "Diff failed: %s" % e}

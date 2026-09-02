@@ -1,0 +1,48 @@
+{# Reusable payload fields. Expects `schema` in context. #}
+<div class="form-grid">
+  <label>Proposal name (file)
+    <input name="name" placeholder="e.g. 01_audit_tech_software" required>
+  </label>
+  <label>Full client name
+    <input name="full_client_name" placeholder="Example Corporation" required>
+  </label>
+  <label>Short client name
+    <input name="short_client_name" placeholder="Example">
+  </label>
+  <label>Due date
+    <input name="due_date" type="date">
+  </label>
+
+  <label>Audit or Tax
+    <select name="audit_or_tax">
+      {% for o in opts.audit_tax %}<option>{{ o }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>New client or Expansion
+    <select name="new_or_expansion">
+      {% for o in opts.new_client %}<option>{{ o }}</option>{% endfor %}
+    </select>
+  </label>
+
+  <label>Industry sector
+    <select name="sector" id="sector">
+      {% for s in opts.sectors %}<option>{{ s }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Industry sub-sector
+    <select name="sub_sector" id="sub_sector"></select>
+  </label>
+
+  <label>City (local office)
+    <select name="city">
+      {% for c in opts.cities %}<option {{ 'selected' if c=='New York' else '' }}>{{ c }}</option>{% endfor %}
+    </select>
+  </label>
+</div>
+
+<fieldset class="toggles">
+  <legend>Optional sections (booleans &rarr; conditional slides)</legend>
+  {% for fkey, pair in schema.BOOLEAN_FIELDS.items() %}
+    <label class="chk"><input type="checkbox" name="{{ fkey }}"> {{ pair[1] }}</label>
+  {% endfor %}
+</fieldset>

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Map &middot; Proposal Builder{% endblock %}
+{% block content %}
+<h1><span class="num">2</span> Map <span class="muted">— learn selection &amp; token rules</span></h1>
+
+<section class="card">
+  <p>Matches every generated slide back to the 265-slide master (by shape
+     creationId), works out which master slides each payload kept, and correlates
+     that to the payload fields.</p>
+  <ul class="stat">
+    <li><b>{{ n_payloads }}</b> payloads</li>
+    <li><b>{{ n_decks }}</b> decks</li>
+    {% if not master_present %}<li class="bad">master.pptx missing</li>{% endif %}
+  </ul>
+  <form method="post" action="/map/run">
+    <button class="btn primary" {% if not master_present or n_decks==0 %}disabled{% endif %}>
+      Run mapping</button>
+  </form>
+  {% if spec_summary %}
+  <p class="hint">Latest: {{ spec_summary.counts.always }} always ·
+    {{ spec_summary.counts.conditional }} conditional ·
+    {{ spec_summary.counts.unclear }} unclear ·
+    {{ spec_summary.counts.never_used }} never-used.
+    <a href="/download?path=mapping/mapping_spec.json">mapping_spec.json</a></p>
+  {% endif %}
+</section>
+
+{% if report %}
+<section class="card">
+  <h2>mapping_report.md</h2>
+  <pre class="report">{{ report }}</pre>
+</section>
+{% else %}
+<p class="muted">No report yet — run the mapping above.</p>
+{% endif %}
+{% endblock %}

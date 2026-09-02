@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Dashboard &middot; Proposal Builder{% endblock %}
+{% block content %}
+<h1>Proposal Builder <span class="muted">— replace Templafy, headless & deterministic</span></h1>
+
+<div class="grid">
+  <section class="card">
+    <h2><span class="num">1</span> Construct</h2>
+    <p>Build a payload and generate the reference deck with your Templafy script.</p>
+    <ul class="stat">
+      <li><b>{{ n_payloads }}</b> payloads</li>
+      <li><b>{{ n_decks }}</b> generated decks</li>
+    </ul>
+    <a class="btn" href="/construct">Open Construct</a>
+  </section>
+
+  <section class="card">
+    <h2><span class="num">2</span> Map</h2>
+    <p>Learn which payload fields keep which master slides, plus dynamic tokens.</p>
+    {% if spec_summary %}
+    <ul class="stat">
+      <li><b>{{ spec_summary.master_slides }}</b> master slides</li>
+      <li><b>{{ spec_summary.counts.always }}</b> always &middot;
+          <b>{{ spec_summary.counts.conditional }}</b> conditional &middot;
+          <b>{{ spec_summary.counts.unclear }}</b> unclear</li>
+    </ul>
+    {% else %}<p class="muted">No mapping yet.</p>{% endif %}
+    <a class="btn" href="/map">Open Map</a>
+  </section>
+
+  <section class="card">
+    <h2><span class="num">3</span> Reconstruct</h2>
+    <p>Rebuild a deck for a new payload from the learned rules — no Templafy.</p>
+    <ul class="stat"><li><b>{{ n_outputs }}</b> rebuilt decks</li></ul>
+    <a class="btn" href="/reconstruct">Open Reconstruct</a>
+  </section>
+</div>
+
+<section class="card checklist">
+  <h2>Setup check</h2>
+  <ul>
+    <li class="{{ 'ok' if master_present else 'bad' }}">
+      265-slide master &mdash; <code>data/master/master.pptx</code>
+      {{ '✓ present' if master_present else '✗ missing — drop it here' }}</li>
+    <li class="{{ 'ok' if script_present else 'bad' }}">
+      Templafy generation script &mdash; <code>scripts/generate_public_audit_template_2026.py</code>
+      {{ '✓ present' if script_present else '✗ missing — drop it here' }}</li>
+    <li class="muted">Templafy credentials &mdash; <code>.env</code> (TEMPLAFY_BASE_URL, TEMPLAFY_TOKEN) at repo root</li>
+  </ul>
+</section>
+{% endblock %}

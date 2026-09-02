@@ -1,0 +1,19 @@
+# secrets
+.env
+
+# confidential inputs/outputs — never commit decks, templates, payloads
+data/master/*.pptx
+data/decks/*.pptx
+data/output/*.pptx
+data/payloads/*.json
+data/mapping/*
+scripts/generate_public_audit_template_2026.py
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# keep the empty folders
+!data/**/.gitkeep

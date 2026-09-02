@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Reconstruct &middot; Proposal Builder{% endblock %}
+{% block content %}
+<h1><span class="num">3</span> Reconstruct <span class="muted">— rebuild a deck from the rules, no Templafy</span></h1>
+
+{% if not spec_summary %}
+<div class="warn">No mapping spec yet. Run the <a href="/map">Map</a> stage first.</div>
+{% endif %}
+
+<div class="two-col">
+  <section class="card">
+    <h2>Rebuild an existing payload</h2>
+    <form method="post" action="/reconstruct/run">
+      <label>Payload
+        <select name="existing">
+          {% for p in payloads %}<option>{{ p }}</option>{% endfor %}
+        </select>
+      </label>
+      <button class="btn primary" {% if not spec_summary or not payloads %}disabled{% endif %}>
+        Reconstruct</button>
+    </form>
+    <p class="hint">Rebuild a payload you already generated with Templafy, then
+      compare the two decks to validate the engine.</p>
+  </section>
+
+  <section class="card">
+    <h2>Rebuilt decks ({{ outputs|length }})</h2>
+    {% if outputs %}
+    <ul class="filelist">
+      {% for o in outputs %}<li><a href="/download?path=output/{{ o }}">{{ o }}</a></li>{% endfor %}
+    </ul>
+    {% else %}<p class="muted">None yet.</p>{% endif %}
+  </section>
+</div>
+
+<form method="post" action="/reconstruct/run" class="card">
+  <h2>Or build a brand-new proposal</h2>
+  {% include "_payload_form.html" %}
+  <div class="actions">
+    <button class="btn primary" {% if not spec_summary %}disabled{% endif %}>
+      Build deck</button>
+  </div>
+</form>
+{% endblock %}
+
+{% block scripts %}<script src="/static/subsectors.js"></script>{% endblock %}

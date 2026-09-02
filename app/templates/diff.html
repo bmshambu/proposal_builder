@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Diff &middot; Proposal Builder{% endblock %}
+{% block content %}
+<h1><span class="num">4</span> Diff <span class="muted">— validate: original (Templafy) vs reconstructed</span></h1>
+
+<section class="card">
+  <p>Compares a Templafy-generated deck against its Templafy-free rebuild. Same
+     slides kept = selection rules correct; same text = tokens correct.</p>
+  <form method="post" action="/diff/run" class="diff-pick">
+    <label>Original (Templafy, <code>decks/</code>)
+      <select name="original">
+        {% for d in decks %}<option {{ 'selected' if d==sel_original else '' }}>{{ d }}</option>{% endfor %}
+      </select>
+    </label>
+    <span class="vs">vs</span>
+    <label>Rebuilt (<code>output/</code>)
+      <select name="rebuilt">
+        {% for o in outputs %}<option {{ 'selected' if o==sel_rebuilt else '' }}>{{ o }}</option>{% endfor %}
+      </select>
+    </label>
+    <button class="btn primary" {% if not decks or not outputs %}disabled{% endif %}>Compare</button>
+  </form>
+  {% if pairs %}
+  <p class="hint">Suggested pairs:
+    {% for p in pairs %}<span class="pill">{{ p.stem }}</span>{% endfor %}</p>
+  {% endif %}
+  {% if err %}<div class="warn">{{ err }}</div>{% endif %}
+</section>
+
+{% if result %}
+{% set c = result.counts %}
+<section class="card">
+  <div class="verdict {{ 'v-ok' if result.verdict=='MATCH' else ('v-warn' if 'TEXT' in result.verdict else 'v-bad') }}">
+    {{ result.verdict }}
+  </div>
+  <p class="muted">{{ result.original }} &nbsp;vs&nbsp; {{ result.rebuilt }}</p>
+
+  <div class="metrics">
+    <div class="metric"><b>{{ c.original_slides }}</b><span>original slides</span></div>
+    <div class="metric"><b>{{ c.rebuilt_slides }}</b><span>rebuilt slides</span></div>
+    <div class="metric"><b>{{ c.matched }}</b><span>matched ({{ c.via_creationId }} by creationId)</span></div>
+    <div class="metric {{ 'bad' if c.only_in_original else 'ok' }}"><b>{{ c.only_in_original }}</b><span>missing from rebuild</span></div>
+    <div class="metric {{ 'bad' if c.only_in_rebuilt else 'ok' }}"><b>{{ c.only_in_rebuilt }}</b><span>extra in rebuild</span></div>
+    <div class="metric {{ 'warn' if c.text_mismatches else 'ok' }}"><b>{{ c.text_mismatches }}</b><span>text mismatches</span></div>
+    <div class="metric {{ 'ok' if result.order_ok else 'bad' }}"><b>{{ 'yes' if result.order_ok else 'no' }}</b><span>order preserved</span></div>
+  </div>
+</section>
+
+{% if result.only_in_original or result.only_in_rebuilt %}
+<section class="card">
+  <h2>Selection differences</h2>
+  {% if result.only_in_original %}
+  <h3 class="bad">Slides in original but MISSING from rebuild ({{ result.only_in_original|length }})</h3>
+  <ul class="difflist">
+    {% for s in result.only_in_original %}<li><b>#{{ s.index }}</b> {{ s.preview }}</li>{% endfor %}
+  </ul>
+  <p class="hint">These point to selection rules that dropped a slide the payload
+    should have kept — usually an <em>unclear</em> or <em>never-used</em> rule.
+    Add more OFAT payloads and re-run Map.</p>
+  {% endif %}
+  {% if result.only_in_rebuilt %}
+  <h3 class="bad">Slides in rebuild but NOT in original ({{ result.only_in_rebuilt|length }})</h3>
+  <ul class="difflist">
+    {% for s in result.only_in_rebuilt %}<li><b>#{{ s.index }}</b> {{ s.preview }}</li>{% endfor %}
+  </ul>
+  <p class="hint">The rebuild kept slides the original dropped — usually an
+    <em>unclear</em> rule kept-by-default. Refine the rule in Map.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if result.text_mismatches %}
+<section class="card">
+  <h2>Text differences on matched slides ({{ result.text_mismatches|length }})</h2>
+  <p class="hint">Residual text diffs are almost always dynamic tokens (client
+    name, date) not yet in <code>data/token_map.json</code>. Add them there and
+    re-run Reconstruct.</p>
+  <table class="difftable">
+    <thead><tr><th>orig&nbsp;#</th><th>rebuilt&nbsp;#</th><th>only in original</th><th>only in rebuilt</th></tr></thead>
+    <tbody>
+      {% for m in result.text_mismatches %}
+      <tr>
+        <td>{{ m.original_index }}</td><td>{{ m.rebuilt_index }}</td>
+        <td class="words">{{ m.only_in_original|join(' ') }}</td>
+        <td class="words">{{ m.only_in_rebuilt|join(' ') }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}
