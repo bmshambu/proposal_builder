@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Harvest &middot; Proposal Builder{% endblock %}
+{% block content %}
+<h1><span class="num">2</span> Harvest <span class="muted">— build the reusable slide-block library</span></h1>
+
+<section class="card">
+  <p>Diffs each training deck against the baseline to isolate the exact slide-block
+     every payload field contributes, and stores it per-asset in
+     <code>data/assets/{{ (library.asset if library else asset_key) }}/</code>.
+     Reconstruct then assembles new decks from these blocks — no Templafy.</p>
+
+  {% if library %}
+  <div class="verdict v-ok">Library ready</div>
+  <ul class="stat">
+    <li><b>{{ library.baseline_slides }}</b> baseline slides</li>
+    <li><b>{{ library.deltas }}</b> harvested deltas</li>
+    <li>fields: {{ library.fields|join(', ') }}</li>
+  </ul>
+  {% else %}
+  <div class="warn">No library yet. Build it from the baseline + training decks.</div>
+  {% endif %}
+
+  <ul class="stat">
+    <li>baseline deck: {{ 'present' if counts.baseline_present else 'MISSING' }}</li>
+    <li><b>{{ counts.train }}</b> training decks (harvested)</li>
+    <li><b>{{ counts.test }}</b> test decks (held out)</li>
+  </ul>
+  {% if counts.test_names %}
+  <p class="hint">Held out of harvesting: {% for t in counts.test_names %}<span class="pill">{{ t }}</span>{% endfor %}</p>
+  {% endif %}
+
+  <form method="post" action="/harvest/build">
+    <button class="btn primary" {% if not counts.baseline_present or counts.train==0 %}disabled{% endif %}>
+      {{ 'Rebuild library' if library else 'Build library' }}</button>
+  </form>
+  <p class="hint">Re-run after generating more training decks. Then go to
+    <a href="/reconstruct">Reconstruct</a>.</p>
+</section>
+
+<section class="card">
+  <p class="muted">Note: the old <a href="/map">Map</a> stage (deck-vs-265-master
+    diagnostic) is no longer part of the pipeline — content comes from the library,
+    not the master. It's kept for onboarding a new template but isn't shown in the nav.</p>
+</section>
+{% endblock %}

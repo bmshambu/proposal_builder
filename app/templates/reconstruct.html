@@ -3,28 +3,32 @@
 {% block content %}
 <h1><span class="num">3</span> Reconstruct <span class="muted">— rebuild a deck from the rules, no Templafy</span></h1>
 
-<section class="card">
-  <h2>Harvested library <span class="muted">— asset folder <code>{{ library.asset if library else '—' }}</code></span></h2>
-  {% if library %}
-  <ul class="stat">
-    <li><b>{{ library.baseline_slides }}</b> baseline slides</li>
-    <li><b>{{ library.deltas }}</b> harvested deltas</li>
-    <li>fields: {{ library.fields|join(', ') }}</li>
-  </ul>
-  {% else %}
-  <p class="muted">No library yet. Build it from the baseline + OFAT decks first.</p>
-  {% endif %}
-  <form method="post" action="/reconstruct/build-library" class="inline">
-    <button class="btn">{{ 'Rebuild library' if library else 'Build library' }}</button>
+{% if not library %}
+<div class="warn">No harvested library yet. Build it in <a href="/harvest">Harvest</a> first.</div>
+{% else %}
+<p class="hint">Using library <code>{{ library.asset }}</code> — {{ library.deltas }} deltas,
+  {{ library.baseline_slides }} baseline slides. Manage it in <a href="/harvest">Harvest</a>.</p>
+{% endif %}
+
+<section class="card batchbar">
+  <form method="post" action="/reconstruct/run-all" class="batchform">
+    <span class="batchlabel"><b>Rebuild all</b> — one output per payload</span>
+    <label>Which
+      <select name="which">
+        <option value="all">all payloads</option>
+        <option value="train">training only</option>
+        <option value="test">test only</option>
+      </select>
+    </label>
+    <button class="btn primary" {% if not library %}disabled{% endif %}>Rebuild all</button>
   </form>
-  <p class="hint">Harvests each payload field's slide-block from the generated
-    decks into <code>data/assets/{{ (library.asset if library else asset_key) }}/</code>.
-    Re-run after generating more decks.</p>
+  <p class="hint">Reconstructs every payload at once (runs in sequence). Use the
+    single-payload option below to test just one.</p>
 </section>
 
 <div class="two-col">
   <section class="card">
-    <h2>Rebuild an existing payload</h2>
+    <h2>Rebuild a single payload</h2>
     <form method="post" action="/reconstruct/run">
       <label>Payload
         <select name="existing">
@@ -34,8 +38,7 @@
       <button class="btn primary" {% if not library or not payloads %}disabled{% endif %}>
         Reconstruct</button>
     </form>
-    <p class="hint">Rebuild a payload you already generated with Templafy, then
-      compare the two decks in <a href="/diff">Diff</a> to validate — aim for MATCH.</p>
+    <p class="hint">Rebuild one payload, then compare in <a href="/diff">Diff</a> — aim for MATCH.</p>
   </section>
 
   <section class="card">

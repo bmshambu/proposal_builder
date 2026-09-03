@@ -15,17 +15,15 @@
   </section>
 
   <section class="card">
-    <h2><span class="num">2</span> Map</h2>
-    <p>Learn which payload fields keep which master slides, plus dynamic tokens.</p>
-    {% if spec_summary %}
+    <h2><span class="num">2</span> Harvest</h2>
+    <p>Build the reusable slide-block library from the training decks.</p>
+    {% if library %}
     <ul class="stat">
-      <li><b>{{ spec_summary.master_slides }}</b> master slides</li>
-      <li><b>{{ spec_summary.counts.always }}</b> always &middot;
-          <b>{{ spec_summary.counts.conditional }}</b> conditional &middot;
-          <b>{{ spec_summary.counts.unclear }}</b> unclear</li>
+      <li><b>{{ library.deltas }}</b> deltas</li>
+      <li><b>{{ library.baseline_slides }}</b> baseline slides</li>
     </ul>
-    {% else %}<p class="muted">No mapping yet.</p>{% endif %}
-    <a class="btn" href="/map">Open Map</a>
+    {% else %}<p class="muted">No library yet.</p>{% endif %}
+    <a class="btn" href="/harvest">Open Harvest</a>
   </section>
 
   <section class="card">

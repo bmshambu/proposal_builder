@@ -33,8 +33,8 @@ def _ctx(request, **extra):
         "n_payloads": len(services.list_payloads()),
         "n_decks": len(services.list_decks()),
         "n_outputs": len(services.list_outputs()),
-        "spec_summary": services.spec_summary(),
         "asset_key": config.active_asset_key(),
+        "library": services.library_status(),
     }
     ctx.update(extra)
     return ctx
@@ -108,7 +108,20 @@ def subsectors(sector: str):
     return JSONResponse(opts["subsectors_by_sector"].get(sector, []))
 
 
-# ------------------------------------------------------------------ Map
+# ------------------------------------------------------------------ Harvest (stage 2)
+@app.get("/harvest", response_class=HTMLResponse)
+def harvest_get(request: Request, msg: str = ""):
+    return templates.TemplateResponse(request, "harvest.html", _ctx(
+        request, counts=services.harvest_counts(), msg=msg))
+
+
+@app.post("/harvest/build")
+def harvest_build():
+    res = services.build_library()
+    return RedirectResponse("/harvest?msg=" + res["log"], status_code=303)
+
+
+# ------------------------------------------------------------------ Map (diagnostic, not in nav)
 @app.get("/map", response_class=HTMLResponse)
 def map_get(request: Request):
     report = config.MAPPING_REPORT.read_text(encoding="utf-8") if config.MAPPING_REPORT.exists() else ""
@@ -131,9 +144,11 @@ def reconstruct_get(request: Request, msg: str = ""):
         library=services.library_status(), msg=msg))
 
 
-@app.post("/reconstruct/build-library")
-def reconstruct_build_library():
-    res = services.build_library()
+@app.post("/reconstruct/run-all")
+async def reconstruct_run_all(request: Request):
+    form = await _collect_form(request)
+    which = form.get("which", "all")
+    res = services.reconstruct_all(which=which)
     return RedirectResponse("/reconstruct?msg=" + res["log"], status_code=303)
 
 
@@ -170,6 +185,17 @@ def diff_run(request: Request, original: str = Form(...), rebuilt: str = Form(..
         decks=files, outputs=files,
         result=res.get("result"), err=None if res["ok"] else res["log"],
         sel_original=original, sel_rebuilt=rebuilt))
+
+
+@app.post("/diff/run-all", response_class=HTMLResponse)
+async def diff_run_all(request: Request):
+    form = await _collect_form(request)
+    which = form.get("which", "all")
+    summary = services.diff_all(which=which)
+    files = services.diff_pick_files()
+    return templates.TemplateResponse(request, "diff.html", _ctx(
+        request, pairs=services.suggest_diff_pairs(),
+        decks=files, outputs=files, batch=summary, which=which))
 
 
 # ------------------------------------------------------------------ download

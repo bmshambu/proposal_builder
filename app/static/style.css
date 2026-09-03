@@ -127,3 +127,4 @@ h3.bad { color: var(--bad); font-size: 14px; margin: 14px 0 6px; }
 .src-ok { background: #eaf6ee; color: var(--ok); border: 1px solid #b7e0c5; }
 .src-def { background: var(--warnbg); color: var(--warn); border: 1px solid #f0d79a; }
 .synbar .hint { margin: 0; }
+.sep { border: none; border-top: 1px solid var(--line); margin: 16px 0; }

@@ -221,6 +221,24 @@ def library_status():
             "fields": sorted({f for d in m.get("deltas", []) for f in (d.get("condition") or {})})}
 
 
+def _stem(path):
+    return os.path.splitext(os.path.basename(path))[0]
+
+
+def harvest_counts():
+    """How many decks will be harvested (training) vs held out (test)."""
+    base = config.BASELINE_STEM
+    train, test = [], []
+    for deck in list_decks():
+        s = _stem(deck)
+        if s == base or not (config.PAYLOADS_DIR / (s + ".json")).exists():
+            continue
+        (test if config.is_test_stem(s) else train).append(s)
+    return {"baseline_present": (config.DECKS_DIR / (base + ".pptx")).exists(),
+            "train": len(train), "test": len(test),
+            "test_names": sorted(test)}
+
+
 # ---------------------------------------------------------------- Reconstruct
 def reconstruct(payload_path):
     """Rebuild a deck for a payload from the harvested library (no Templafy)."""
@@ -240,6 +258,25 @@ def reconstruct(payload_path):
         return {"ok": True, "log": log, "out": out_path, "total": res["total_slides"]}
     except Exception as e:
         return {"ok": False, "log": "Reconstruct failed: %s" % e}
+
+
+def reconstruct_all(which="all"):
+    """Reconstruct many payloads at once. which = all | train | test."""
+    import harvest
+    if not harvest.load_manifest(config.active_asset_dir()):
+        return {"ok": False, "log": "No library yet — build it in Harvest first."}
+    done, failed = [], []
+    for p in list_payloads():
+        s = _stem(p)
+        if which == "train" and config.is_test_stem(s):
+            continue
+        if which == "test" and not config.is_test_stem(s):
+            continue
+        r = reconstruct(str(p))
+        (done if r["ok"] else failed).append(s)
+    log = "Rebuilt %d payloads (%s)%s." % (
+        len(done), which, (", %d failed: %s" % (len(failed), ", ".join(failed))) if failed else "")
+    return {"ok": True, "log": log, "done": done, "failed": failed}
 
 
 # ---------------------------------------------------------------- Diff
@@ -286,3 +323,54 @@ def diff_pick_files():
     names = [os.path.basename(d) for d in list_decks()] + \
             [os.path.basename(o) for o in list_outputs()]
     return sorted(set(names))
+
+
+def _verdict_bucket(v):
+    if v == "MATCH":
+        return "match"
+    if v.startswith("SELECTION"):
+        return "selection"
+    return "text"
+
+
+def diff_all(which="all"):
+    """Diff every rebuilt deck against its Templafy original. which = all|train|test.
+    Returns a per-payload table + tally, split by train/test."""
+    import diff_decks as dd
+    rows = []
+    tally = {"match": 0, "selection": 0, "text": 0}
+    for o in list_outputs():
+        stem = _stem(o)
+        if stem.endswith("_rebuilt"):
+            stem = stem[:-len("_rebuilt")]
+        original = config.DECKS_DIR / (stem + ".pptx")
+        if not original.exists():
+            continue
+        is_test = config.is_test_stem(stem)
+        if which == "train" and is_test:
+            continue
+        if which == "test" and not is_test:
+            continue
+        try:
+            r = dd.diff(str(original), o)
+        except Exception as e:
+            rows.append({"stem": stem, "is_test": is_test, "verdict": "ERROR: %s" % e,
+                         "bucket": "text"})
+            tally["text"] += 1
+            continue
+        c = r["counts"]
+        bucket = _verdict_bucket(r["verdict"])
+        tally[bucket] += 1
+        rows.append({
+            "stem": stem, "is_test": is_test, "verdict": r["verdict"], "bucket": bucket,
+            "orig": c["original_slides"], "rebuilt": c["rebuilt_slides"],
+            "matched": c["matched"], "missing": c["only_in_original"],
+            "extra": c["only_in_rebuilt"], "text_mismatches": c["text_mismatches"],
+            "order_ok": r["order_ok"],
+        })
+    rows.sort(key=lambda x: (x["is_test"], x["stem"]))
+    total = len(rows)
+    return {"which": which, "rows": rows, "tally": tally, "total": total,
+            "match_rate": (100 * tally["match"] // total) if total else 0,
+            "train_total": sum(1 for r in rows if not r["is_test"]),
+            "test_total": sum(1 for r in rows if r["is_test"])}

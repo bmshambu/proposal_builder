@@ -28,7 +28,59 @@
     {% for p in pairs %}<span class="pill">{{ p.stem }}</span>{% endfor %}</p>
   {% endif %}
   {% if err %}<div class="warn">{{ err }}</div>{% endif %}
+
+  <hr class="sep">
+  <form method="post" action="/diff/run-all" class="batchform">
+    <span class="batchlabel"><b>Compare all</b> — every rebuild vs its Templafy original</span>
+    <label>Which
+      <select name="which">
+        <option value="all">all</option>
+        <option value="train">training</option>
+        <option value="test">test only</option>
+      </select>
+    </label>
+    <button class="btn primary">Compare all</button>
+  </form>
 </section>
+
+{% if batch %}
+<section class="card">
+  <h2>Batch validation summary <span class="muted">({{ batch.which }})</span></h2>
+  {% if batch.total %}
+  <div class="verdict {{ 'v-ok' if batch.match_rate==100 else ('v-warn' if batch.match_rate>=50 else 'v-bad') }}">
+    {{ batch.match_rate }}% MATCH ({{ batch.tally.match }}/{{ batch.total }})
+  </div>
+  <div class="metrics">
+    <div class="metric ok"><b>{{ batch.tally.match }}</b><span>MATCH</span></div>
+    <div class="metric {{ 'bad' if batch.tally.selection else '' }}"><b>{{ batch.tally.selection }}</b><span>selection differs</span></div>
+    <div class="metric {{ 'warn' if batch.tally.text else '' }}"><b>{{ batch.tally.text }}</b><span>text differs</span></div>
+    <div class="metric"><b>{{ batch.train_total }}</b><span>training</span></div>
+    <div class="metric"><b>{{ batch.test_total }}</b><span>test (held out)</span></div>
+  </div>
+  <table class="difftable">
+    <thead><tr><th>payload</th><th>set</th><th>verdict</th><th>orig</th><th>rebuilt</th>
+      <th>matched</th><th>missing</th><th>extra</th><th>text</th><th>order</th></tr></thead>
+    <tbody>
+      {% for r in batch.rows %}
+      <tr>
+        <td>{{ r.stem }}</td>
+        <td>{% if r.is_test %}<span class="pill">test</span>{% else %}train{% endif %}</td>
+        <td class="{{ 'ok' if r.bucket=='match' else ('bad' if r.bucket=='selection' else 'warn') }}"><b>{{ r.verdict }}</b></td>
+        <td>{{ r.orig }}</td><td>{{ r.rebuilt }}</td><td>{{ r.matched }}</td>
+        <td class="{{ 'bad' if r.missing else '' }}">{{ r.missing }}</td>
+        <td class="{{ 'bad' if r.extra else '' }}">{{ r.extra }}</td>
+        <td class="{{ 'warn' if r.text_mismatches else '' }}">{{ r.text_mismatches }}</td>
+        <td>{{ 'yes' if r.order_ok else 'no' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No rebuilt decks to compare yet — reconstruct some first
+    (<a href="/reconstruct">Reconstruct → Rebuild all</a>).</p>
+  {% endif %}
+</section>
+{% endif %}
 
 {% if result %}
 {% set c = result.counts %}
