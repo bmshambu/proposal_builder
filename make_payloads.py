@@ -85,8 +85,23 @@ def main():
 
     train_n = len(written)
 
-    # ---- held-out TEST set: unseen combinations + new client/date --------------
+    # ---- held-out TEST set --------------------------------------------------
     test = []
+
+    # (a) PASSING cases: unseen COMBINATIONS but the STANDARD client/date, so the
+    #     data-driven slides carry the same content as training -> expect MATCH.
+    #     These demonstrate "payloads like these reproduce perfectly."
+    test.append(write("test_pass_transitionlab_chicago_audittax", {
+        "transition_lab": "on", "city": "Chicago", "audit_or_tax": "Audit & Tax"}))
+    test.append(write("test_pass_peerreview_healthcare", {
+        "peer_review": "on", "sector": "Healthcare", "sub_sector": "Healthcare"}))
+    test.append(write("test_pass_aboutkpmg_quality_expansion", {
+        "about_kpmg": "on", "quality": "on",
+        "new_or_expansion": "Expansion of Services"}))
+
+    # (b) NEW-CLIENT combinations: exercise selection composition + tokens, and
+    #     expose the ~5 data-driven slides (fees/profile/RFP) that need the data
+    #     source. These characterise "what still differs, and why."
     test.append(write("test_combo_transitionlab_peerreview_chicago", {
         "transition_lab": "on", "peer_review": "on", "city": "Chicago",
         "full_client_name": "Globex Corporation", "short_client_name": "Globex",

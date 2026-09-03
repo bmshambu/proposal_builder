@@ -338,6 +338,24 @@ def _xml_escape(s):
     return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
+def _rels_for_slide(slide_xml, rels_xml):
+    """Build a slide's .rels keeping the slideLayout rel PLUS every relationship
+    the slide XML actually references (by r:id / r:embed / r:link). Dropping a
+    referenced rel (e.g. a hyperlink) leaves a dangling reference that makes
+    PowerPoint report 'found a problem with content'. Unreferenced rels (notes,
+    comments, tags) are dropped since we don't copy those parts."""
+    referenced = set(re.findall(r'r:(?:id|embed|link)="([^"]+)"', slide_xml))
+    kept = []
+    for m in re.finditer(r'<Relationship\b[^>]*?/>', rels_xml):
+        t = m.group(0)
+        rid = re.search(r'Id="([^"]+)"', t)
+        if "slideLayout" in t or (rid and rid.group(1) in referenced):
+            kept.append(t)
+    return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/'
+            '2006/relationships">' + "".join(kept) + "</Relationships>")
+
+
 def overrides_path(asset_dir):
     return os.path.join(str(asset_dir), "overrides.json")
 
@@ -452,14 +470,7 @@ def assemble(asset_dir, payload, out_path, verbose=False):
                                             'Target="../media/%s"' % new_name)
                 add_rels = add_rels.replace('Target="/ppt/media/%s"' % mrec["file"],
                                             'Target="../media/%s"' % new_name)
-            # keep only layout + media rels (drop notes/comments referencing uncopied parts)
-            kept_rels = [m.group(0) for m in re.finditer(r'<Relationship\b[^>]*?/>', add_rels)
-                         if ("slideLayout" in m.group(0) or "media" in m.group(0)
-                             or "/image" in m.group(0))]
-            add_rels_final = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-                              '<Relationships xmlns="http://schemas.openxmlformats.org/'
-                              'package/2006/relationships">' + "".join(kept_rels)
-                              + "</Relationships>")
+            add_rels_final = _rels_for_slide(slide_xml, add_rels)
             prepared_adds.setdefault(frozenset(a["anchor_key"]), []).append({
                 "part": new_part,
                 "slide_xml": _apply_tokens(slide_xml, reps),
@@ -492,12 +503,7 @@ def assemble(asset_dir, payload, out_path, verbose=False):
                 new_media_parts["ppt/media/" + new_name] = open(src, "rb").read()
                 swap_rels = swap_rels.replace('Target="../media/%s"' % mrec["file"],
                                               'Target="../media/%s"' % new_name)
-            kept_rels = [m.group(0) for m in re.finditer(r'<Relationship\b[^>]*?/>', swap_rels)
-                         if ("slideLayout" in m.group(0) or "media" in m.group(0)
-                             or "/image" in m.group(0))]
-            swap_rels_final = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-                               '<Relationships xmlns="http://schemas.openxmlformats.org/'
-                               'package/2006/relationships">' + "".join(kept_rels) + "</Relationships>")
+            swap_rels_final = _rels_for_slide(swap_xml, swap_rels)
             swap_by_part[part] = {"xml": _apply_tokens(swap_xml, reps), "rels": swap_rels_final}
     swap_rels_by_name = {"ppt/slides/_rels/%s.rels" % os.path.basename(p): v["rels"]
                          for p, v in swap_by_part.items()}
