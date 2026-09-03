@@ -148,22 +148,19 @@ async def reconstruct_run(request: Request):
 # ------------------------------------------------------------------ Diff
 @app.get("/diff", response_class=HTMLResponse)
 def diff_get(request: Request):
+    files = services.diff_pick_files()
     return templates.TemplateResponse(request, "diff.html", _ctx(
-        request,
-        pairs=services.suggest_diff_pairs(),
-        decks=[os.path.basename(d) for d in services.list_decks()],
-        outputs=[os.path.basename(o) for o in services.list_outputs()],
-        result=None))
+        request, pairs=services.suggest_diff_pairs(),
+        decks=files, outputs=files, result=None))
 
 
 @app.post("/diff/run", response_class=HTMLResponse)
 def diff_run(request: Request, original: str = Form(...), rebuilt: str = Form(...)):
     res = services.run_diff(original, rebuilt)
+    files = services.diff_pick_files()
     return templates.TemplateResponse(request, "diff.html", _ctx(
-        request,
-        pairs=services.suggest_diff_pairs(),
-        decks=[os.path.basename(d) for d in services.list_decks()],
-        outputs=[os.path.basename(o) for o in services.list_outputs()],
+        request, pairs=services.suggest_diff_pairs(),
+        decks=files, outputs=files,
         result=res.get("result"), err=None if res["ok"] else res["log"],
         sel_original=original, sel_rebuilt=rebuilt))
 

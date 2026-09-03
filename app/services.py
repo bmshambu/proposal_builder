@@ -220,13 +220,29 @@ def suggest_diff_pairs():
     return pairs
 
 
+def _resolve_deck(name):
+    """Find a deck by basename in either decks/ or output/."""
+    for d in (config.DECKS_DIR, config.OUTPUT_DIR):
+        p = os.path.join(str(d), name)
+        if os.path.exists(p):
+            return p
+    return None
+
+
 def run_diff(original_name, rebuilt_name):
     import diff_decks as dd
-    original = str(config.DECKS_DIR / original_name)
-    rebuilt = str(config.OUTPUT_DIR / rebuilt_name)
-    if not os.path.exists(original) or not os.path.exists(rebuilt):
-        return {"ok": False, "log": "Pick one original (decks/) and one rebuilt (output/) deck."}
+    original = _resolve_deck(original_name)
+    rebuilt = _resolve_deck(rebuilt_name)
+    if not original or not rebuilt:
+        return {"ok": False, "log": "Both files must exist in decks/ or output/."}
     try:
         return {"ok": True, "result": dd.diff(original, rebuilt)}
     except Exception as e:
         return {"ok": False, "log": "Diff failed: %s" % e}
+
+
+def diff_pick_files():
+    """All decks + rebuilt outputs, for either side of a comparison."""
+    names = [os.path.basename(d) for d in list_decks()] + \
+            [os.path.basename(o) for o in list_outputs()]
+    return sorted(set(names))

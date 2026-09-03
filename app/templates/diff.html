@@ -7,19 +7,22 @@
   <p>Compares a Templafy-generated deck against its Templafy-free rebuild. Same
      slides kept = selection rules correct; same text = tokens correct.</p>
   <form method="post" action="/diff/run" class="diff-pick">
-    <label>Original (Templafy, <code>decks/</code>)
+    <label>Deck A <span class="muted">(decks/ or output/)</span>
       <select name="original">
         {% for d in decks %}<option {{ 'selected' if d==sel_original else '' }}>{{ d }}</option>{% endfor %}
       </select>
     </label>
     <span class="vs">vs</span>
-    <label>Rebuilt (<code>output/</code>)
+    <label>Deck B <span class="muted">(decks/ or output/)</span>
       <select name="rebuilt">
         {% for o in outputs %}<option {{ 'selected' if o==sel_rebuilt else '' }}>{{ o }}</option>{% endfor %}
       </select>
     </label>
-    <button class="btn primary" {% if not decks or not outputs %}disabled{% endif %}>Compare</button>
+    <button class="btn primary" {% if not decks %}disabled{% endif %}>Compare</button>
   </form>
+  <p class="hint">Tip: compare two Templafy decks (e.g. <code>00_baseline</code> vs
+    <code>01_transition_lab</code>) to see if they share slide identity — the key
+    test for whether content slides come from a reusable library.</p>
   {% if pairs %}
   <p class="hint">Suggested pairs:
     {% for p in pairs %}<span class="pill">{{ p.stem }}</span>{% endfor %}</p>
