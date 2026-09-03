@@ -323,36 +323,62 @@ def _xml_escape(s):
     return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
+def overrides_path(asset_dir):
+    return os.path.join(str(asset_dir), "overrides.json")
+
+
+def load_overrides(asset_dir):
+    p = overrides_path(asset_dir)
+    return _load_json(p) if os.path.exists(p) else []
+
+
+def save_overrides(asset_dir, rules):
+    with open(overrides_path(asset_dir), "w", encoding="utf-8") as fh:
+        json.dump(rules, fh, indent=2)
+
+
+def _override_reps(asset_dir, payload_flat):
+    """Manual (human-in-the-loop) fixups -> [(find, replace)].
+      kind 'token': replace `find` with the payload's value for `field` (always).
+      kind 'swap' : when payload[when_field]==when_value, replace `find`->`replace_with`.
+    """
+    reps = []
+    for r in load_overrides(asset_dir):
+        find = r.get("find")
+        if not find:
+            continue
+        if r.get("kind") == "token":
+            val = payload_flat.get(r.get("field"))
+            if val is not None:
+                reps.append((find, str(val)))
+        elif r.get("kind") == "swap":
+            if str(payload_flat.get(r.get("when_field"))) == str(r.get("when_value")):
+                reps.append((find, r.get("replace_with", "")))
+    return reps
+
+
 def _apply_tokens(xml, reps):
-    """Replace token strings even when split across multiple <a:t> runs, by
-    working at the paragraph level: join a paragraph's run texts, replace, and
-    write the result back into the first run (blanking the rest). Paragraphs with
-    no token are left byte-for-byte untouched."""
+    """Replace token strings INSIDE each <a:t> text run individually. This is
+    strictly non-structural — it never rewrites paragraphs, empties runs, or
+    touches anything outside a run's text — so it cannot corrupt a slide or alter
+    creationIds. Handles the common case where Templafy inserts a value (client
+    name, date) as a single run. (Values split across multiple runs are left as a
+    text diff rather than risking structural damage.)"""
     if not reps:
         return xml
+    reps = sorted(reps, key=lambda r: -len(r[0]))   # longest match first
 
-    def process(pmatch):
-        p = pmatch.group(0)
-        ts = list(re.finditer(r'(<a:t[^>]*>)(.*?)(</a:t>)', p, re.DOTALL))
-        if not ts:
-            return p
-        joined = "".join(_xml_unescape(t.group(2)) for t in ts)
-        new = joined
+    def repl(m):
+        raw = _xml_unescape(m.group(2))
+        new = raw
         for find, rep in reps:
             if find in new:
                 new = new.replace(find, rep)
-        if new == joined:
-            return p
-        out, last = [], 0
-        for i, t in enumerate(ts):
-            out.append(p[last:t.start()])
-            inner = _xml_escape(new) if i == 0 else ""
-            out.append(t.group(1) + inner + t.group(3))
-            last = t.end()
-        out.append(p[last:])
-        return "".join(out)
+        if new == raw:
+            return m.group(0)
+        return m.group(1) + _xml_escape(new) + m.group(3)
 
-    return re.sub(r'<a:p\b.*?</a:p>', process, xml, flags=re.DOTALL)
+    return re.sub(r'(<a:t[^>]*>)(.*?)(</a:t>)', repl, xml, flags=re.DOTALL)
 
 
 def assemble(asset_dir, payload, out_path, verbose=False):
@@ -368,6 +394,7 @@ def assemble(asset_dir, payload, out_path, verbose=False):
     base_deck = pf.load_deck(baseline_pptx)
     baseline_text = " ".join(s["text"] for s in base_deck["slides"])
     reps = _token_replacements(manifest, payload_flat, baseline_text)
+    reps += _override_reps(asset_dir, payload_flat)   # manual human-in-the-loop fixups
 
     zf = zipfile.ZipFile(baseline_pptx)
     names = zf.namelist()

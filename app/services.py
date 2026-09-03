@@ -210,6 +210,29 @@ def build_library():
         return {"ok": False, "log": "Harvest failed: %s" % e}
 
 
+def list_overrides():
+    import harvest
+    return harvest.load_overrides(config.active_asset_dir())
+
+
+def add_override(rule):
+    import harvest, uuid
+    asset = config.active_asset_dir()
+    rules = harvest.load_overrides(asset)
+    rule = dict(rule)
+    rule["id"] = uuid.uuid4().hex[:8]
+    rules.append(rule)
+    harvest.save_overrides(asset, rules)
+    return rule
+
+
+def delete_override(rule_id):
+    import harvest
+    asset = config.active_asset_dir()
+    rules = [r for r in harvest.load_overrides(asset) if r.get("id") != rule_id]
+    harvest.save_overrides(asset, rules)
+
+
 def library_status():
     import harvest
     m = harvest.load_manifest(config.active_asset_dir())
@@ -306,6 +329,53 @@ def _resolve_deck(name):
     return None
 
 
+def _suggest_fixups(result, rebuilt_name):
+    """Turn a diff's text mismatches into ready-to-confirm fixup rules. Only when
+    Deck B is a <stem>_rebuilt.pptx whose payload we can read (so we can infer the
+    condition). Proposes a 'token' rule when the change is a client/date value,
+    else a 'swap' rule conditioned on the payload's varied field."""
+    import harvest
+    base = os.path.basename(rebuilt_name)
+    if not base.endswith("_rebuilt.pptx"):
+        return []
+    stem = base[:-len("_rebuilt.pptx")]
+    pj, bj = config.PAYLOADS_DIR / (stem + ".json"), config.PAYLOADS_DIR / (config.BASELINE_STEM + ".json")
+    if not pj.exists() or not bj.exists():
+        return []
+    payload = harvest.flatten(read_payload(str(pj)))
+    baseline = harvest.flatten(read_payload(str(bj)))
+    varied = {k: v for k, v in payload.items()
+              if str(baseline.get(k)) != str(v) and k != "I agree to comply with these policies"}
+    tb = (harvest.load_manifest(config.active_asset_dir()) or {}).get("token_baseline", {})
+
+    out, seen = [], set()
+    for mm in result.get("text_mismatches", []):
+        for seg in mm.get("segments", []):
+            was, should = seg["was"].strip(), (seg.get("should_be") or "").strip()
+            if not was:
+                continue
+            token_field = None
+            for key in ("FullClientName", "ShortClientName", "DueDate"):
+                if should and str(payload.get(key)) == should and str(tb.get(key)) == was:
+                    token_field = key
+                    break
+            if token_field:
+                s = {"kind": "token", "find": was, "field": token_field,
+                     "slide": mm["rebuilt_index"]}
+            elif varied:
+                wf = sorted(varied)[0]
+                s = {"kind": "swap", "when_field": wf, "when_value": str(varied[wf]),
+                     "find": was, "replace_with": should, "slide": mm["rebuilt_index"]}
+            else:
+                continue
+            key = (s["kind"], s.get("find"), s.get("field"), s.get("when_field"),
+                   s.get("when_value"), s.get("replace_with"))
+            if key not in seen:
+                seen.add(key)
+                out.append(s)
+    return out
+
+
 def run_diff(original_name, rebuilt_name):
     import diff_decks as dd
     original = _resolve_deck(original_name)
@@ -313,7 +383,9 @@ def run_diff(original_name, rebuilt_name):
     if not original or not rebuilt:
         return {"ok": False, "log": "Both files must exist in decks/ or output/."}
     try:
-        return {"ok": True, "result": dd.diff(original, rebuilt)}
+        r = dd.diff(original, rebuilt)
+        r["suggestions"] = _suggest_fixups(r, rebuilt_name)
+        return {"ok": True, "result": r}
     except Exception as e:
         return {"ok": False, "log": "Diff failed: %s" % e}
 

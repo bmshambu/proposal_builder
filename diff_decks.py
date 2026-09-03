@@ -22,11 +22,27 @@ CLI
 """
 
 import argparse
+import difflib
 import json
 
 import pptx_forensics as pf
 
 MATCH_THRESHOLD = 0.34
+
+
+def _segments(original_text, rebuilt_text):
+    """Concrete word-level changes turning the REBUILT text into the ORIGINAL.
+    Returns [{was, should_be}] where `was` is the rebuilt phrase (wrong) and
+    `should_be` is the original/Templafy phrase (correct) — ready to become a
+    find->replace fixup. Skips pure insertions (nothing to 'find')."""
+    a, b = original_text.split(), rebuilt_text.split()   # a=original, b=rebuilt
+    segs = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, b, a).get_opcodes():
+        if tag == "replace":
+            segs.append({"was": " ".join(b[i1:i2]), "should_be": " ".join(a[j1:j2])})
+        elif tag == "delete":                            # extra words in rebuild
+            segs.append({"was": " ".join(b[i1:i2]), "should_be": ""})
+    return [s for s in segs if s["was"].strip()][:5]
 
 
 def _align(a_slides, b_slides):
@@ -72,6 +88,7 @@ def diff(original_path, rebuilt_path):
                 "original_index": a["index"], "rebuilt_index": b["index"],
                 "only_in_original": sorted(aw - bw)[:25],
                 "only_in_rebuilt": sorted(bw - aw)[:25],
+                "segments": _segments(a["text"], b["text"]),
             })
         if len(a["images"]) != len(b["images"]):
             image_mismatches.append({

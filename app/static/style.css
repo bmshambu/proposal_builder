@@ -128,3 +128,11 @@ h3.bad { color: var(--bad); font-size: 14px; margin: 14px 0 6px; }
 .src-def { background: var(--warnbg); color: var(--warn); border: 1px solid #f0d79a; }
 .synbar .hint { margin: 0; }
 .sep { border: none; border-top: 1px solid var(--line); margin: 16px 0; }
+.stage.util { color: var(--muted); font-weight: 600; margin-left: 4px; }
+.stage.util.active { background: #eaf0fb; color: var(--brand2); }
+.card.help { background: #f4f8ff; border-color: #cfe0ff; }
+.card.help p { margin: 6px 0; }
+.fixsuggest { background: #fff9ec; border-color: #f0d79a; }
+.suggestion { display: flex; align-items: center; justify-content: space-between;
+  gap: 14px; padding: 10px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.suggestion .sg-text { flex: 1; min-width: 260px; font-size: 14px; }

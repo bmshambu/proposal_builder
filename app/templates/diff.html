@@ -101,6 +101,41 @@
   </div>
 </section>
 
+{% if result.suggestions %}
+<section class="card fixsuggest">
+  <h2>&#128295; Suggested fixups ({{ result.suggestions|length }})</h2>
+  <p class="hint">The diff found text the automation didn't fully handle. Review each
+    suggestion and click <b>Add this fixup</b> — then <a href="/reconstruct">Reconstruct</a>
+    (Rebuild all) and Compare again to confirm it's resolved.</p>
+  {% for s in result.suggestions %}
+  <div class="suggestion">
+    {% if s.kind == 'token' %}
+    <div class="sg-text">Slide {{ s.slide }}: fill in
+      &ldquo;<b>{{ s.find }}</b>&rdquo; with the <code>{{ s.field }}</code> value.</div>
+    <form method="post" action="/fixups/add-token" class="inline">
+      <input type="hidden" name="find" value="{{ s.find }}">
+      <input type="hidden" name="field" value="{{ s.field }}">
+      <input type="hidden" name="note" value="from diff, slide {{ s.slide }}">
+      <button class="btn primary small">Add this fixup</button>
+    </form>
+    {% else %}
+    <div class="sg-text">Slide {{ s.slide }}: when <code>{{ s.when_field }}</code> =
+      &ldquo;{{ s.when_value }}&rdquo;, replace
+      &ldquo;<b>{{ s.find }}</b>&rdquo; &rarr; &ldquo;<b>{{ s.replace_with }}</b>&rdquo;.</div>
+    <form method="post" action="/fixups/add-swap" class="inline">
+      <input type="hidden" name="when_field" value="{{ s.when_field }}">
+      <input type="hidden" name="when_value" value="{{ s.when_value }}">
+      <input type="hidden" name="find" value="{{ s.find }}">
+      <input type="hidden" name="replace_with" value="{{ s.replace_with }}">
+      <input type="hidden" name="note" value="from diff, slide {{ s.slide }}">
+      <button class="btn primary small">Add this fixup</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
 {% if result.only_in_original or result.only_in_rebuilt %}
 <section class="card">
   <h2>Selection differences</h2>

@@ -113,3 +113,26 @@ def _normalize_date(s):
     """Accept 2019-11-30 or 20191130 -> 20191130."""
     digits = "".join(ch for ch in s if ch.isdigit())
     return digits[:8] if len(digits) >= 8 else s
+
+
+# --- UI helpers for the Fixups (manual override) tab ------------------------
+def value_field_choices():
+    """Payload fields whose value can be filled in via a 'token' fixup."""
+    return [(TEXT_FIELDS["full_client_name"], "Full client name"),
+            (TEXT_FIELDS["short_client_name"], "Short client name"),
+            (TEXT_FIELDS["due_date"], "Due date (YYYYMMDD)")]
+
+
+def condition_field_choices():
+    """(templafy_key, label, [allowed values]) for 'swap' fixup conditions."""
+    out = [
+        (ENUM_FIELDS["audit_or_tax"], "Audit or Tax", AUDIT_TAX_OPTIONS),
+        (ENUM_FIELDS["new_or_expansion"], "New client or Expansion", NEW_CLIENT_OPTIONS),
+        (ENUM_FIELDS["sector"], "Industry sector", SECTORS),
+        (ENUM_FIELDS["sub_sector"], "Industry sub-sector",
+         sorted({s for subs in SUBSECTORS_BY_SECTOR.values() for s in subs})),
+        (ENUM_FIELDS["city"], "City", CITIES),
+    ]
+    for _fkey, (tkey, label) in BOOLEAN_FIELDS.items():
+        out.append((tkey, label, ["True", "False"]))
+    return out

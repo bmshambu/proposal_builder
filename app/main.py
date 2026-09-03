@@ -121,6 +121,36 @@ def harvest_build():
     return RedirectResponse("/harvest?msg=" + res["log"], status_code=303)
 
 
+# ------------------------------------------------------------------ Fixups (human-in-the-loop)
+@app.get("/fixups", response_class=HTMLResponse)
+def fixups_get(request: Request, msg: str = ""):
+    return templates.TemplateResponse(request, "fixups.html", _ctx(
+        request, schema=schema, overrides=services.list_overrides(), msg=msg))
+
+
+@app.post("/fixups/add-token")
+def fixups_add_token(find: str = Form(...), field: str = Form(...), note: str = Form("")):
+    if find.strip():
+        services.add_override({"kind": "token", "find": find, "field": field, "note": note})
+    return RedirectResponse("/fixups?msg=Fixup added.", status_code=303)
+
+
+@app.post("/fixups/add-swap")
+def fixups_add_swap(when_field: str = Form(...), when_value: str = Form(...),
+                    find: str = Form(...), replace_with: str = Form(...), note: str = Form("")):
+    if find.strip():
+        services.add_override({"kind": "swap", "when_field": when_field,
+                               "when_value": when_value, "find": find,
+                               "replace_with": replace_with, "note": note})
+    return RedirectResponse("/fixups?msg=Fixup added.", status_code=303)
+
+
+@app.post("/fixups/delete")
+def fixups_delete(rule_id: str = Form(...)):
+    services.delete_override(rule_id)
+    return RedirectResponse("/fixups?msg=Fixup removed.", status_code=303)
+
+
 # ------------------------------------------------------------------ Map (diagnostic, not in nav)
 @app.get("/map", response_class=HTMLResponse)
 def map_get(request: Request):

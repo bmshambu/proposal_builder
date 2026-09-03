@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Fixups &middot; Proposal Builder{% endblock %}
+{% block content %}
+<h1>&#128295; Fixups <span class="muted">— manual text fixes when the automatic harvest misses something</span></h1>
+
+<section class="card help">
+  <p><b>When do I use this?</b> The engine reproduces decks automatically, but a
+  few text bits can slip through — for example a client name in an unusual spot,
+  or wording that changes with an option (e.g. &ldquo;new audit client&rdquo;
+  becomes &ldquo;expansion of services&rdquo;). If <a href="/diff">Diff</a> shows
+  a <b>text mismatch</b>, add a small rule here, then rebuild and diff again.</p>
+  <p class="muted">Rules are saved with the asset and are re-applied every time you
+  Reconstruct. They survive rebuilding the library, so your manual work is never lost.</p>
+</section>
+
+<div class="two-col">
+  <!-- Rule type A: token fill-in -->
+  <section class="card">
+    <h2>1. Fill in a value</h2>
+    <p class="hint">Use when a client name or date wasn't replaced somewhere.
+      &ldquo;Wherever the deck says <b>this text</b>, put the value from <b>this field</b>.&rdquo;</p>
+    <form method="post" action="/fixups/add-token">
+      <label>Find this text (as it appears in the baseline deck)
+        <input name="find" placeholder="Example Corporation" required>
+      </label>
+      <label>Replace it with the value of
+        <select name="field">
+          {% for key, label in schema.value_field_choices() %}
+          <option value="{{ key }}">{{ label }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Note (optional)
+        <input name="note" placeholder="client name in the footer">
+      </label>
+      <button class="btn primary">Add fill-in rule</button>
+    </form>
+    <p class="hint"><b>Example:</b> Find &ldquo;Example Corporation&rdquo; &rarr;
+      Full client name. Now every deck gets the right client there.</p>
+  </section>
+
+  <!-- Rule type B: conditional swap -->
+  <section class="card">
+    <h2>2. Swap text for a condition</h2>
+    <p class="hint">Use when wording changes with an option.
+      &ldquo;When <b>this field</b> is <b>this value</b>, replace <b>A</b> with <b>B</b>.&rdquo;</p>
+    <form method="post" action="/fixups/add-swap">
+      <label>When this field
+        <select name="when_field" id="when_field">
+          {% for key, label, values in schema.condition_field_choices() %}
+          <option value="{{ key }}" data-values="{{ values|join('|') }}">{{ label }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>is this value
+        <select name="when_value" id="when_value"></select>
+      </label>
+      <label>Replace this text
+        <input name="find" placeholder="New Audit Client" required>
+      </label>
+      <label>with this text
+        <input name="replace_with" placeholder="Expansion of Services">
+      </label>
+      <label>Note (optional)
+        <input name="note" placeholder="reworded intro line">
+      </label>
+      <button class="btn primary">Add swap rule</button>
+    </form>
+    <p class="hint"><b>Example:</b> When &ldquo;New client or Expansion&rdquo; is
+      &ldquo;Expansion of Services&rdquo;, replace &ldquo;new audit client&rdquo;
+      with &ldquo;expansion of services&rdquo;.</p>
+  </section>
+</div>
+
+<section class="card">
+  <h2>Current fixups ({{ overrides|length }})</h2>
+  {% if overrides %}
+  <table class="difftable">
+    <thead><tr><th>type</th><th>rule</th><th>note</th><th></th></tr></thead>
+    <tbody>
+      {% for r in overrides %}
+      <tr>
+        <td>{{ 'fill-in' if r.kind=='token' else 'swap' }}</td>
+        <td class="words">
+          {% if r.kind=='token' %}
+            &ldquo;{{ r.find }}&rdquo; &rarr; value of <code>{{ r.field }}</code>
+          {% else %}
+            when <code>{{ r.when_field }}</code> = &ldquo;{{ r.when_value }}&rdquo;:
+            &ldquo;{{ r.find }}&rdquo; &rarr; &ldquo;{{ r.replace_with }}&rdquo;
+          {% endif %}
+        </td>
+        <td class="muted">{{ r.note }}</td>
+        <td>
+          <form method="post" action="/fixups/delete" class="inline">
+            <input type="hidden" name="rule_id" value="{{ r.id }}">
+            <button class="btn small">remove</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="hint">After adding rules, go to <a href="/reconstruct">Reconstruct</a>
+    (Rebuild all) and then <a href="/diff">Diff</a> (Compare all) to confirm the
+    text mismatches are gone.</p>
+  {% else %}
+  <p class="muted">No fixups yet. Add one above only if Diff shows a text mismatch
+    the automation couldn't handle.</p>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// populate the "is this value" dropdown from the selected condition field
+(function () {
+  var f = document.getElementById("when_field"), v = document.getElementById("when_value");
+  if (!f || !v) return;
+  function fill() {
+    var vals = (f.selectedOptions[0].getAttribute("data-values") || "").split("|");
+    v.innerHTML = "";
+    vals.forEach(function (x) { if (x) { var o = document.createElement("option"); o.textContent = x; v.appendChild(o); } });
+  }
+  f.addEventListener("change", fill); fill();
+})();
+</script>
+{% endblock %}
