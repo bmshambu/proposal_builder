@@ -86,7 +86,7 @@ def align(deck, base):
     removed = [baseline_key,...] present in baseline but not the deck."""
     base_keys = {_key(s): s for s in base["slides"] if s["shape_creation_ids"]}
     matched_base = set()
-    added, last_anchor = [], frozenset()
+    added, matched, last_anchor = [], [], frozenset()
     for ds in deck["slides"]:
         k = _key(ds)
         hit = base_keys.get(k)
@@ -101,11 +101,12 @@ def align(deck, base):
                 k = best
         if hit is not None:
             matched_base.add(k)
+            matched.append((ds, hit))
             last_anchor = k
         else:
             added.append((ds, last_anchor))
     removed = [bk for bk in base_keys if bk not in matched_base]
-    return added, removed
+    return added, removed, matched
 
 
 # ---------------------------------------------------------------- harvest
@@ -124,6 +125,29 @@ def _media_targets(rels_xml):
             if rid and tgt:
                 out.append((rid.group(1), tgt.group(1)))
     return out
+
+
+def _harvest_slide(zf, names, part, dest_dir):
+    """Copy one slide's XML + rels + media out of a deck into dest_dir.
+    Returns {slide_file, media:[{rid,file}]}."""
+    os.makedirs(os.path.join(dest_dir, "media"), exist_ok=True)
+    slide_xml = zf.read(part)
+    rels_name = _slide_rels_name(part)
+    rels_xml = zf.read(rels_name).decode("utf-8", "ignore") if rels_name in names else ""
+    media = []
+    for rid, tgt in _media_targets(rels_xml):
+        mp = os.path.normpath(os.path.join("ppt/slides", tgt)).replace("\\", "/")
+        if mp in names:
+            mb = os.path.basename(mp)
+            with open(os.path.join(dest_dir, "media", mb), "wb") as fh:
+                fh.write(zf.read(mp))
+            media.append({"rid": rid, "file": mb})
+    sf = os.path.basename(part)
+    with open(os.path.join(dest_dir, sf), "wb") as fh:
+        fh.write(slide_xml)
+    with open(os.path.join(dest_dir, sf + ".rels"), "w", encoding="utf-8") as fh:
+        fh.write(rels_xml)
+    return {"slide_file": sf, "media": media}
 
 
 def build_library(baseline_pptx, baseline_payload, pairs, asset_dir):
@@ -164,47 +188,38 @@ def build_library(baseline_pptx, baseline_payload, pairs, asset_dir):
             continue
         seen_conditions.add(cond_key)
         deck = pf.load_deck(deck_path)
-        added, removed = align(deck, base)
+        added, removed, matched = align(deck, base)
+
+        # conditional slide-swaps: a matched (kept) slide whose TEXT differs from
+        # baseline because of this factor (e.g. expansion rewords a slide). Both
+        # decks use the same client, so any text diff here is factor-driven.
+        swaps_pairs = [(ds, bs) for ds, bs in matched
+                       if pf.word_set(ds["text"]) != pf.word_set(bs["text"])]
 
         slug = _condition_slug(condition)
-        adds_meta = []
-        if added:
-            # one block folder per delta (may hold several added slides)
+        adds_meta, swaps_meta = [], []
+        if added or swaps_pairs:
             block_dir = os.path.join(blocks_root, slug)
-            os.makedirs(os.path.join(block_dir, "media"), exist_ok=True)
+            os.makedirs(block_dir, exist_ok=True)
             zf = zipfile.ZipFile(deck_path)
             names = zf.namelist()
             for ds, anchor in added:
-                part = ds["part"]
-                slide_xml = zf.read(part)
-                rels_name = _slide_rels_name(part)
-                rels_xml = zf.read(rels_name).decode("utf-8", "ignore") if rels_name in names else ""
-                media = []
-                for rid, tgt in _media_targets(rels_xml):
-                    mp = os.path.normpath(os.path.join("ppt/slides", tgt)).replace("\\", "/")
-                    if mp in names:
-                        mb = os.path.basename(mp)
-                        with open(os.path.join(block_dir, "media", mb), "wb") as fh:
-                            fh.write(zf.read(mp))
-                        media.append({"rid": rid, "file": mb})
-                sf = os.path.basename(part)
-                with open(os.path.join(block_dir, sf), "wb") as fh:
-                    fh.write(slide_xml)
-                with open(os.path.join(block_dir, sf + ".rels"), "w", encoding="utf-8") as fh:
-                    fh.write(rels_xml)
-                adds_meta.append({
-                    "slide_file": sf,
-                    "anchor_key": sorted(anchor),
-                    "media": media,
-                })
+                meta = _harvest_slide(zf, names, ds["part"], block_dir)
+                meta["anchor_key"] = sorted(anchor)
+                adds_meta.append(meta)
+            for ds, bs in swaps_pairs:
+                meta = _harvest_slide(zf, names, ds["part"], os.path.join(block_dir, "swaps"))
+                meta["base_key"] = sorted(_key(bs))
+                swaps_meta.append(meta)
             zf.close()
 
         deltas.append({
             "condition": condition,
             "label": ", ".join("%s=%s" % (k, v) for k, v in sorted(condition.items())),
             "deck": os.path.basename(deck_path),
-            "block_slug": slug if added else None,
+            "block_slug": slug if (added or swaps_pairs) else None,
             "adds": adds_meta,
+            "swaps": swaps_meta,
             "removes": [sorted(r) for r in removed],
         })
 
@@ -452,6 +467,41 @@ def assemble(asset_dir, payload, out_path, verbose=False):
             })
             ct_new_slide_parts.append(new_part)
 
+    # conditional slide-swaps: replace a kept baseline slide's content with the
+    # harvested version for this condition (same identity + position, new content).
+    part_by_key = {it["key"]: it["part"] for it in items}
+    swap_by_part = {}          # baseline part -> {"xml":..., "rels":...}
+    for d in deltas:
+        for sw in d.get("swaps", []):
+            part = part_by_key.get(frozenset(sw["base_key"]))
+            if not part or frozenset(sw["base_key"]) in removes:
+                continue
+            block_dir = os.path.join(asset_dir, "blocks", d["block_slug"], "swaps")
+            slide_path = os.path.join(block_dir, sw["slide_file"])
+            if not os.path.exists(slide_path):
+                continue
+            swap_xml = open(slide_path, "rb").read().decode("utf-8", "ignore")
+            rels_path = slide_path + ".rels"
+            swap_rels = open(rels_path, encoding="utf-8").read() if os.path.exists(rels_path) else ""
+            for mrec in sw["media"]:
+                src = os.path.join(block_dir, "media", mrec["file"])
+                if not os.path.exists(src):
+                    continue
+                add_counter += 1
+                new_name = "sw%d_%s" % (add_counter, mrec["file"])
+                new_media_parts["ppt/media/" + new_name] = open(src, "rb").read()
+                swap_rels = swap_rels.replace('Target="../media/%s"' % mrec["file"],
+                                              'Target="../media/%s"' % new_name)
+            kept_rels = [m.group(0) for m in re.finditer(r'<Relationship\b[^>]*?/>', swap_rels)
+                         if ("slideLayout" in m.group(0) or "media" in m.group(0)
+                             or "/image" in m.group(0))]
+            swap_rels_final = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                               '<Relationships xmlns="http://schemas.openxmlformats.org/'
+                               'package/2006/relationships">' + "".join(kept_rels) + "</Relationships>")
+            swap_by_part[part] = {"xml": _apply_tokens(swap_xml, reps), "rels": swap_rels_final}
+    swap_rels_by_name = {"ppt/slides/_rels/%s.rels" % os.path.basename(p): v["rels"]
+                         for p, v in swap_by_part.items()}
+
     # build final slide order (rId assigned fresh, sldId ids renumbered)
     final = []
     for a in prepared_adds.get(frozenset(), []):        # anchored to start
@@ -535,6 +585,10 @@ def assemble(asset_dir, payload, out_path, verbose=False):
                 continue
             if name in edited:
                 out.writestr(name, edited[name]); continue
+            if name in swap_by_part:            # kept slide replaced by condition version
+                out.writestr(name, swap_by_part[name]["xml"]); continue
+            if name in swap_rels_by_name:
+                out.writestr(name, swap_rels_by_name[name]); continue
             if name.startswith("ppt/slides/slide") and name.endswith(".xml") \
                     and os.path.basename(name) in kept_slide_parts and reps:
                 out.writestr(name, _apply_tokens(_read(zf, name), reps)); continue

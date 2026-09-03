@@ -400,6 +400,8 @@ def diff_pick_files():
 def _verdict_bucket(v):
     if v == "MATCH":
         return "match"
+    if "data-driven" in v:        # selection correct; data-source slides differ
+        return "dynamic"
     if "TEXT DIFFERS" in v:       # "SELECTION OK, TEXT DIFFERS ..." is a text diff
         return "text"
     if "SELECTION DIFFERS" in v:
@@ -412,7 +414,7 @@ def diff_all(which="all"):
     Returns a per-payload table + tally, split by train/test."""
     import diff_decks as dd
     rows = []
-    tally = {"match": 0, "selection": 0, "text": 0}
+    tally = {"match": 0, "selection": 0, "text": 0, "dynamic": 0}
     for o in list_outputs():
         stem = _stem(o)
         if stem.endswith("_rebuilt"):
@@ -439,12 +441,16 @@ def diff_all(which="all"):
             "stem": stem, "is_test": is_test, "verdict": r["verdict"], "bucket": bucket,
             "orig": c["original_slides"], "rebuilt": c["rebuilt_slides"],
             "matched": c["matched"], "missing": c["only_in_original"],
-            "extra": c["only_in_rebuilt"], "text_mismatches": c["text_mismatches"],
-            "order_ok": r["order_ok"],
+            "extra": c["only_in_rebuilt"], "dynamic": c.get("dynamic_slides", 0),
+            "text_mismatches": c["text_mismatches"], "order_ok": r["order_ok"],
         })
     rows.sort(key=lambda x: (x["is_test"], x["stem"]))
     total = len(rows)
+    # selection is correct for MATCH + data-driven + text-only rows (only true
+    # missing/extra means selection is actually wrong)
+    selection_ok = tally["match"] + tally["dynamic"] + tally["text"]
     return {"which": which, "rows": rows, "tally": tally, "total": total,
             "match_rate": (100 * tally["match"] // total) if total else 0,
+            "selection_ok_rate": (100 * selection_ok // total) if total else 0,
             "train_total": sum(1 for r in rows if not r["is_test"]),
             "test_total": sum(1 for r in rows if r["is_test"])}

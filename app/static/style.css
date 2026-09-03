@@ -135,4 +135,5 @@ h3.bad { color: var(--bad); font-size: 14px; margin: 14px 0 6px; }
 .fixsuggest { background: #fff9ec; border-color: #f0d79a; }
 .suggestion { display: flex; align-items: center; justify-content: space-between;
   gap: 14px; padding: 10px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-.suggestion .sg-text { flex: 1; min-width: 260px; font-size: 14px; }
+.suggestion .sg-text { flex: 1; min-width: 260px; font-size: 14px; line-height: 2; }
+.suggestion .sg-text input { padding: 3px 6px; margin: 2px 0; }

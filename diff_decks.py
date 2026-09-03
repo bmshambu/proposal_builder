@@ -97,10 +97,26 @@ def diff(original_path, rebuilt_path):
                 "rebuilt_images": len(b["images"]),
             })
 
-    if only_original or only_rebuilt:
+    # Data-driven slides: an unmatched original and an unmatched rebuild slide at
+    # the SAME position are the same slot filled from a data source (profile, fees,
+    # RFP, etc.) — Templafy regenerates them per deck with fresh creationIds, so
+    # they can't be paired by identity even though selection is correct. Separate
+    # these from TRUE selection differences (a slide genuinely added/dropped).
+    oi = {s["index"]: s for s in only_original}
+    ri = {s["index"]: s for s in only_rebuilt}
+    dynamic_idx = sorted(set(oi) & set(ri))
+    dynamic_slides = [{"index": i,
+                       "original_preview": oi[i]["text"][:70],
+                       "rebuilt_preview": ri[i]["text"][:70]} for i in dynamic_idx]
+    true_only_original = [s for s in only_original if s["index"] not in ri]
+    true_only_rebuilt = [s for s in only_rebuilt if s["index"] not in oi]
+
+    if true_only_original or true_only_rebuilt:
         verdict = "SELECTION DIFFERS"
     elif text_mismatches:
         verdict = "SELECTION OK, TEXT DIFFERS (likely tokens)"
+    elif dynamic_slides:
+        verdict = "SELECTION OK - %d data-driven slide(s) differ" % len(dynamic_slides)
     else:
         verdict = "MATCH"
 
@@ -113,14 +129,16 @@ def diff(original_path, rebuilt_path):
             "matched": len(pairs),
             "via_creationId": creationid_matches,
             "via_structural": structural_matches,
-            "only_in_original": len(only_original),
-            "only_in_rebuilt": len(only_rebuilt),
+            "only_in_original": len(true_only_original),
+            "only_in_rebuilt": len(true_only_rebuilt),
+            "dynamic_slides": len(dynamic_slides),
             "text_mismatches": len(text_mismatches),
             "image_mismatches": len(image_mismatches),
         },
+        "dynamic_slides": dynamic_slides,
         "order_ok": order_ok,
-        "only_in_original": [{"index": a["index"], "preview": a["text"][:70]} for a in only_original],
-        "only_in_rebuilt": [{"index": b["index"], "preview": b["text"][:70]} for b in only_rebuilt],
+        "only_in_original": [{"index": a["index"], "preview": a["text"][:70]} for a in true_only_original],
+        "only_in_rebuilt": [{"index": b["index"], "preview": b["text"][:70]} for b in true_only_rebuilt],
         "text_mismatches": text_mismatches,
         "image_mismatches": image_mismatches,
     }

@@ -50,16 +50,19 @@
   <div class="verdict {{ 'v-ok' if batch.match_rate==100 else ('v-warn' if batch.match_rate>=50 else 'v-bad') }}">
     {{ batch.match_rate }}% MATCH ({{ batch.tally.match }}/{{ batch.total }})
   </div>
+  <p class="muted">Selection correct on <b>{{ batch.selection_ok_rate }}%</b>
+    ({{ batch.tally.match + batch.tally.dynamic + batch.tally.text }}/{{ batch.total }})
+    — i.e. the right slides in the right places; only true add/drop counts as a selection failure.</p>
   <div class="metrics">
     <div class="metric ok"><b>{{ batch.tally.match }}</b><span>MATCH</span></div>
-    <div class="metric {{ 'bad' if batch.tally.selection else '' }}"><b>{{ batch.tally.selection }}</b><span>selection differs</span></div>
+    <div class="metric"><b>{{ batch.tally.dynamic }}</b><span>data-driven only</span></div>
     <div class="metric {{ 'warn' if batch.tally.text else '' }}"><b>{{ batch.tally.text }}</b><span>text differs</span></div>
-    <div class="metric"><b>{{ batch.train_total }}</b><span>training</span></div>
+    <div class="metric {{ 'bad' if batch.tally.selection else '' }}"><b>{{ batch.tally.selection }}</b><span>selection differs</span></div>
     <div class="metric"><b>{{ batch.test_total }}</b><span>test (held out)</span></div>
   </div>
   <table class="difftable">
     <thead><tr><th>payload</th><th>set</th><th>verdict</th><th>orig</th><th>rebuilt</th>
-      <th>matched</th><th>missing</th><th>extra</th><th>text</th><th>order</th></tr></thead>
+      <th>matched</th><th>missing</th><th>extra</th><th>data-driven</th><th>text</th><th>order</th></tr></thead>
     <tbody>
       {% for r in batch.rows %}
       <tr>
@@ -69,6 +72,7 @@
         <td>{{ r.orig }}</td><td>{{ r.rebuilt }}</td><td>{{ r.matched }}</td>
         <td class="{{ 'bad' if r.missing else '' }}">{{ r.missing }}</td>
         <td class="{{ 'bad' if r.extra else '' }}">{{ r.extra }}</td>
+        <td>{{ r.dynamic }}</td>
         <td class="{{ 'warn' if r.text_mismatches else '' }}">{{ r.text_mismatches }}</td>
         <td>{{ 'yes' if r.order_ok else 'no' }}</td>
       </tr>
@@ -97,9 +101,29 @@
     <div class="metric {{ 'bad' if c.only_in_original else 'ok' }}"><b>{{ c.only_in_original }}</b><span>missing from rebuild</span></div>
     <div class="metric {{ 'bad' if c.only_in_rebuilt else 'ok' }}"><b>{{ c.only_in_rebuilt }}</b><span>extra in rebuild</span></div>
     <div class="metric {{ 'warn' if c.text_mismatches else 'ok' }}"><b>{{ c.text_mismatches }}</b><span>text mismatches</span></div>
+    <div class="metric"><b>{{ c.dynamic_slides }}</b><span>data-driven slides</span></div>
     <div class="metric {{ 'ok' if result.order_ok else 'bad' }}"><b>{{ 'yes' if result.order_ok else 'no' }}</b><span>order preserved</span></div>
   </div>
 </section>
+
+{% if result.dynamic_slides %}
+<section class="card">
+  <h2>Data-driven slides ({{ result.dynamic_slides|length }})</h2>
+  <p class="hint">Same slide slot, but the content comes from a <b>data source /
+    profile</b> (partner names, fees, RFP tables, personalized text) that Templafy
+    fills per engagement. Selection is correct — these are the pieces that need the
+    data integration (or are filled by a human) to match byte-for-byte.</p>
+  <table class="difftable">
+    <thead><tr><th>slide</th><th>original (Templafy)</th><th>rebuild (baseline data)</th></tr></thead>
+    <tbody>
+      {% for d in result.dynamic_slides %}
+      <tr><td>#{{ d.index }}</td><td class="words">{{ d.original_preview }}</td>
+        <td class="words">{{ d.rebuilt_preview }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
 
 {% if result.suggestions %}
 <section class="card fixsuggest">
@@ -107,31 +131,33 @@
   <p class="hint">The diff found text the automation didn't fully handle. Review each
     suggestion and click <b>Add this fixup</b> — then <a href="/reconstruct">Reconstruct</a>
     (Rebuild all) and Compare again to confirm it's resolved.</p>
+  <p class="hint">You can edit the suggested text before adding — the auto-guess
+    isn't always perfect (e.g. it may propose deleting text when the right fix is a
+    reword). Check it against the slide, then add.</p>
   {% for s in result.suggestions %}
-  <div class="suggestion">
-    {% if s.kind == 'token' %}
-    <div class="sg-text">Slide {{ s.slide }}: fill in
-      &ldquo;<b>{{ s.find }}</b>&rdquo; with the <code>{{ s.field }}</code> value.</div>
-    <form method="post" action="/fixups/add-token" class="inline">
-      <input type="hidden" name="find" value="{{ s.find }}">
+  {% if s.kind == 'token' %}
+  <form method="post" action="/fixups/add-token" class="suggestion">
+    <div class="sg-text">Slide {{ s.slide }} — fill in
+      <input name="find" value="{{ s.find }}" size="24">
+      with the <code>{{ s.field }}</code> value.
       <input type="hidden" name="field" value="{{ s.field }}">
       <input type="hidden" name="note" value="from diff, slide {{ s.slide }}">
-      <button class="btn primary small">Add this fixup</button>
-    </form>
-    {% else %}
-    <div class="sg-text">Slide {{ s.slide }}: when <code>{{ s.when_field }}</code> =
-      &ldquo;{{ s.when_value }}&rdquo;, replace
-      &ldquo;<b>{{ s.find }}</b>&rdquo; &rarr; &ldquo;<b>{{ s.replace_with }}</b>&rdquo;.</div>
-    <form method="post" action="/fixups/add-swap" class="inline">
+    </div>
+    <button class="btn primary small">Add</button>
+  </form>
+  {% else %}
+  <form method="post" action="/fixups/add-swap" class="suggestion">
+    <div class="sg-text">Slide {{ s.slide }} — when <code>{{ s.when_field }}</code> =
+      &ldquo;{{ s.when_value }}&rdquo;:<br>
+      replace <input name="find" value="{{ s.find }}" size="30">
+      with <input name="replace_with" value="{{ s.replace_with }}" size="30">
       <input type="hidden" name="when_field" value="{{ s.when_field }}">
       <input type="hidden" name="when_value" value="{{ s.when_value }}">
-      <input type="hidden" name="find" value="{{ s.find }}">
-      <input type="hidden" name="replace_with" value="{{ s.replace_with }}">
       <input type="hidden" name="note" value="from diff, slide {{ s.slide }}">
-      <button class="btn primary small">Add this fixup</button>
-    </form>
-    {% endif %}
-  </div>
+    </div>
+    <button class="btn primary small">Add</button>
+  </form>
+  {% endif %}
   {% endfor %}
 </section>
 {% endif %}

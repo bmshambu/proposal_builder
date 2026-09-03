@@ -136,8 +136,8 @@ def fixups_add_token(find: str = Form(...), field: str = Form(...), note: str = 
 
 
 @app.post("/fixups/add-swap")
-def fixups_add_swap(when_field: str = Form(...), when_value: str = Form(...),
-                    find: str = Form(...), replace_with: str = Form(...), note: str = Form("")):
+def fixups_add_swap(when_field: str = Form(""), when_value: str = Form(""),
+                    find: str = Form(...), replace_with: str = Form(""), note: str = Form("")):
     if find.strip():
         services.add_override({"kind": "swap", "when_field": when_field,
                                "when_value": when_value, "find": find,
