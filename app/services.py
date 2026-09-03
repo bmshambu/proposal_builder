@@ -171,33 +171,73 @@ def spec_summary():
             "payloads": spec.get("payload_count"), "counts": counts}
 
 
+# ---------------------------------------------------------------- Harvest library
+def _library_pairs():
+    """(baseline_pptx, baseline_payload_path, [(deck, payload)...]) for harvesting."""
+    stem = config.BASELINE_STEM
+    baseline_pptx = config.DECKS_DIR / (stem + ".pptx")
+    baseline_payload = config.PAYLOADS_DIR / (stem + ".json")
+    pairs = []
+    for deck in list_decks():
+        s = os.path.splitext(os.path.basename(deck))[0]
+        if s == stem:
+            continue
+        pj = config.PAYLOADS_DIR / (s + ".json")
+        if pj.exists():
+            pairs.append((deck, str(pj)))
+    return baseline_pptx, baseline_payload, pairs
+
+
+def build_library():
+    """Harvest the per-asset slide-block library from baseline + OFAT decks."""
+    import harvest
+    baseline_pptx, baseline_payload, pairs = _library_pairs()
+    if not os.path.exists(baseline_pptx):
+        return {"ok": False, "log": "Baseline deck missing: generate %s first."
+                % (config.BASELINE_STEM + ".pptx")}
+    if not os.path.exists(baseline_payload):
+        return {"ok": False, "log": "Baseline payload missing: %s.json" % config.BASELINE_STEM}
+    if not pairs:
+        return {"ok": False, "log": "No other decks to harvest — generate the OFAT decks."}
+    try:
+        m = harvest.build_library(str(baseline_pptx), read_payload(baseline_payload),
+                                  pairs, config.active_asset_dir())
+        fields = sorted({d["field"] for d in m["deltas"]})
+        return {"ok": True, "asset": config.active_asset_key(),
+                "log": "Harvested %d deltas across %d fields into asset '%s'."
+                       % (len(m["deltas"]), len(fields), config.active_asset_key())}
+    except Exception as e:
+        return {"ok": False, "log": "Harvest failed: %s" % e}
+
+
+def library_status():
+    import harvest
+    m = harvest.load_manifest(config.active_asset_dir())
+    if not m:
+        return None
+    return {"asset": config.active_asset_key(),
+            "baseline_slides": m.get("baseline_slides"),
+            "deltas": len(m.get("deltas", [])),
+            "fields": sorted({d["field"] for d in m.get("deltas", [])})}
+
+
 # ---------------------------------------------------------------- Reconstruct
 def reconstruct(payload_path):
-    """Rebuild a deck for a payload from the mapping spec + master (no Templafy)."""
-    import reconstruct as rc  # engine module at repo root
-
-    spec = load_spec()
-    if not spec:
-        return {"ok": False, "log": "No mapping_spec.json yet - run the Map stage first."}
-    if not config.MASTER_PPTX.exists():
-        return {"ok": False, "log": "Master template missing at %s." % config.MASTER_PPTX}
-
+    """Rebuild a deck for a payload from the harvested library (no Templafy)."""
+    import harvest
+    if not harvest.load_manifest(config.active_asset_dir()):
+        return {"ok": False, "log": "No harvested library yet — click 'Build library' first."}
     payload = read_payload(payload_path)
-    token_map = {}
-    if config.TOKEN_MAP.exists():
-        token_map = json.load(open(config.TOKEN_MAP, encoding="utf-8"))
-
     stem = os.path.splitext(os.path.basename(payload_path))[0]
     out_path = str(config.OUTPUT_DIR / (stem + "_rebuilt.pptx"))
     try:
-        res = rc.build(str(config.MASTER_PPTX), spec, payload, out_path,
-                       token_map=token_map, verbose=False)
-        log = ("Kept %d slides, dropped %d, tokens injected on %d slides.\n"
-               % (len(res["kept"]), res["dropped_count"], res["tokens_applied"]))
-        if res["warnings"]:
-            log += "Warnings:\n" + "\n".join(" - " + w for w in res["warnings"])
-        return {"ok": True, "log": log, "out": out_path,
-                "kept": res["kept"], "warnings": res["warnings"]}
+        res = harvest.assemble(config.active_asset_dir(), payload, out_path, verbose=False)
+        applied = ", ".join("%s=%s" % (f, v) for f, v in res["deltas_applied"]) or "(baseline only)"
+        log = ("Assembled %d slides = %d baseline kept + %d harvested, %d dropped.\n"
+               "Deltas applied: %s\nToken replacements: %d"
+               % (res["total_slides"], res["kept"], res["added"], res["dropped"],
+                  applied, res["tokens"]))
+        return {"ok": True, "log": log, "out": out_path, "total": res["total_slides"]}
     except Exception as e:
         return {"ok": False, "log": "Reconstruct failed: %s" % e}
 

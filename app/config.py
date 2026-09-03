@@ -27,6 +27,24 @@ MAPPING_REPORT = MAPPING_DIR / "mapping_report.md"
 TOKEN_MAP = DATA / "token_map.json"          # optional {find_text: payload_field}
 LAST_LOG = DATA / "last_generation.log"      # stdout/stderr of the most recent run
 
+# --- per-asset harvested library --------------------------------------------
+# Each Templafy template/asset gets its own folder under data/assets/<asset>/,
+# holding that template's baseline deck + harvested slide-blocks + manifest.json.
+# A new template later = a new folder, no code change. The active asset key comes
+# from TEMPLAFY_ASSET_ID in .env (folder-sanitized); defaults to "template_01".
+ASSETS_DIR = DATA / "assets"
+BASELINE_STEM = os.environ.get("BASELINE_STEM", "00_baseline")
+
+def active_asset_key():
+    raw = subprocess_env().get("TEMPLAFY_ASSET_ID") or "template_01"
+    safe = "".join(c for c in raw if c.isalnum() or c in ("-", "_", ".")).strip("._")
+    return safe or "template_01"
+
+def active_asset_dir():
+    d = ASSETS_DIR / active_asset_key()
+    (d / "blocks").mkdir(parents=True, exist_ok=True)
+    return d
+
 # --- Templafy generation script (yours, dropped into scripts/) ---------------
 # The Construct stage shells out to this. Adjust GENERATE_SCRIPT / GENERATE_ARGS
 # to match your script's actual CLI if it differs from the assumed one.

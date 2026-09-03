@@ -34,6 +34,7 @@ def _ctx(request, **extra):
         "n_decks": len(services.list_decks()),
         "n_outputs": len(services.list_outputs()),
         "spec_summary": services.spec_summary(),
+        "asset_key": config.active_asset_key(),
     }
     ctx.update(extra)
     return ctx
@@ -127,7 +128,13 @@ def reconstruct_get(request: Request, msg: str = ""):
         request, schema=schema, opts=constraints.effective_options(),
         payloads=[os.path.basename(p) for p in services.list_payloads()],
         outputs=[os.path.basename(o) for o in services.list_outputs()],
-        msg=msg))
+        library=services.library_status(), msg=msg))
+
+
+@app.post("/reconstruct/build-library")
+def reconstruct_build_library():
+    res = services.build_library()
+    return RedirectResponse("/reconstruct?msg=" + res["log"], status_code=303)
 
 
 @app.post("/reconstruct/run")
