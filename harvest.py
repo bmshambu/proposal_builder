@@ -146,6 +146,7 @@ def build_library(baseline_pptx, baseline_payload, pairs, asset_dir):
             token_baseline[key] = base_flat[key]
 
     deltas = []
+    seen_conditions = set()
     for deck_path, payload_path in pairs:
         payload = _load_json(payload_path)
         diffs = varied_fields(flatten(payload), base_flat)
@@ -156,6 +157,12 @@ def build_library(baseline_pptx, baseline_payload, pairs, asset_dir):
                      if k not in ("I agree to comply with these policies",)}
         if not condition:
             continue
+        cond_key = tuple(sorted((k, str(v)) for k, v in condition.items()))
+        if cond_key in seen_conditions:      # duplicate payload for same condition
+            print("skip duplicate condition from %s: %s"
+                  % (os.path.basename(deck_path), condition))
+            continue
+        seen_conditions.add(cond_key)
         deck = pf.load_deck(deck_path)
         added, removed = align(deck, base)
 
@@ -261,21 +268,91 @@ def _applicable(manifest, payload_flat):
     return out
 
 
-def _token_replacements(manifest, payload_flat):
-    """[(find, replace)] longest-first, mapping baseline literals -> new values."""
+_MONTHS = ["January", "February", "March", "April", "May", "June", "July",
+           "August", "September", "October", "November", "December"]
+
+
+def _date_variants(yyyymmdd):
+    """Common human formats a YYYYMMDD date might be rendered as in a deck."""
+    s = re.sub(r"\D", "", str(yyyymmdd))
+    if len(s) < 8:
+        return {}
+    y, m, d = int(s[:4]), int(s[4:6]), int(s[6:8])
+    if not (1 <= m <= 12 and 1 <= d <= 31):
+        return {}
+    mon, ab = _MONTHS[m - 1], _MONTHS[m - 1][:3]
+    return {
+        "long_comma": "%s %d, %d" % (mon, d, y),      # November 30, 2026
+        "day_month":  "%d %s %d" % (d, mon, y),       # 30 November 2026
+        "abbr_comma": "%s %d, %d" % (ab, d, y),        # Nov 30, 2026
+        "day_abbr":   "%d %s %d" % (d, ab, y),         # 30 Nov 2026
+        "us_slash":   "%02d/%02d/%d" % (m, d, y),      # 11/30/2026
+        "eu_slash":   "%02d/%02d/%d" % (d, m, y),      # 30/11/2026
+        "iso":        "%d-%02d-%02d" % (y, m, d),      # 2026-11-30
+        "raw":        s,                                # 20261130
+    }
+
+
+def _token_replacements(manifest, payload_flat, baseline_text=""):
+    """[(find, replace)] mapping baseline literals -> new values. Client/short
+    names by literal; dates by whichever human format actually appears in the
+    baseline deck text."""
     reps = []
-    for key, base_val in manifest.get("token_baseline", {}).items():
-        new_val = payload_flat.get(key)
-        if new_val is not None and str(new_val) != str(base_val) and str(base_val):
+    tb = manifest.get("token_baseline", {})
+    for key in ("FullClientName", "ShortClientName"):
+        base_val, new_val = tb.get(key), payload_flat.get(key)
+        if base_val and new_val is not None and str(new_val) != str(base_val):
             reps.append((str(base_val), str(new_val)))
+    # date: detect the format present in the baseline deck, map to the new date
+    bd, nd = tb.get("DueDate"), payload_flat.get("DueDate")
+    if bd and nd and str(bd) != str(nd):
+        bvar, nvar = _date_variants(bd), _date_variants(nd)
+        for k, bstr in bvar.items():
+            if bstr and k in nvar and bstr in baseline_text:
+                reps.append((bstr, nvar[k]))
     reps.sort(key=lambda r: -len(r[0]))          # replace longer strings first
     return reps
 
 
+def _xml_unescape(s):
+    return (s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"')
+             .replace("&apos;", "'").replace("&amp;", "&"))
+
+
+def _xml_escape(s):
+    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
 def _apply_tokens(xml, reps):
-    for find, rep in reps:
-        xml = xml.replace(find, rep)
-    return xml
+    """Replace token strings even when split across multiple <a:t> runs, by
+    working at the paragraph level: join a paragraph's run texts, replace, and
+    write the result back into the first run (blanking the rest). Paragraphs with
+    no token are left byte-for-byte untouched."""
+    if not reps:
+        return xml
+
+    def process(pmatch):
+        p = pmatch.group(0)
+        ts = list(re.finditer(r'(<a:t[^>]*>)(.*?)(</a:t>)', p, re.DOTALL))
+        if not ts:
+            return p
+        joined = "".join(_xml_unescape(t.group(2)) for t in ts)
+        new = joined
+        for find, rep in reps:
+            if find in new:
+                new = new.replace(find, rep)
+        if new == joined:
+            return p
+        out, last = [], 0
+        for i, t in enumerate(ts):
+            out.append(p[last:t.start()])
+            inner = _xml_escape(new) if i == 0 else ""
+            out.append(t.group(1) + inner + t.group(3))
+            last = t.end()
+        out.append(p[last:])
+        return "".join(out)
+
+    return re.sub(r'<a:p\b.*?</a:p>', process, xml, flags=re.DOTALL)
 
 
 def assemble(asset_dir, payload, out_path, verbose=False):
@@ -288,7 +365,9 @@ def assemble(asset_dir, payload, out_path, verbose=False):
 
     deltas = _applicable(manifest, payload_flat)
     removes = set(frozenset(r) for d in deltas for r in d["removes"])
-    reps = _token_replacements(manifest, payload_flat)
+    base_deck = pf.load_deck(baseline_pptx)
+    baseline_text = " ".join(s["text"] for s in base_deck["slides"])
+    reps = _token_replacements(manifest, payload_flat, baseline_text)
 
     zf = zipfile.ZipFile(baseline_pptx)
     names = zf.namelist()

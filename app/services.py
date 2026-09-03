@@ -328,7 +328,9 @@ def diff_pick_files():
 def _verdict_bucket(v):
     if v == "MATCH":
         return "match"
-    if v.startswith("SELECTION"):
+    if "TEXT DIFFERS" in v:       # "SELECTION OK, TEXT DIFFERS ..." is a text diff
+        return "text"
+    if "SELECTION DIFFERS" in v:
         return "selection"
     return "text"
 

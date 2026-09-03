@@ -5,7 +5,7 @@
 data/master/*.pptx
 data/decks/*.pptx
 data/output/*.pptx
-#data/payloads/*.json
+data/payloads/*.json
 data/mapping/*
 data/assets/
 data/last_generation.log
