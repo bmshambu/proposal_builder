@@ -38,7 +38,7 @@
   <div class="metrics">
     <div class="metric"><b>{{ c.original_slides }}</b><span>original slides</span></div>
     <div class="metric"><b>{{ c.rebuilt_slides }}</b><span>rebuilt slides</span></div>
-    <div class="metric"><b>{{ c.matched }}</b><span>matched ({{ c.via_creationId }} by creationId)</span></div>
+    <div class="metric"><b>{{ c.matched }}</b><span>matched ({{ c.via_creationId }} creationId, {{ c.via_structural }} structural)</span></div>
     <div class="metric {{ 'bad' if c.only_in_original else 'ok' }}"><b>{{ c.only_in_original }}</b><span>missing from rebuild</span></div>
     <div class="metric {{ 'bad' if c.only_in_rebuilt else 'ok' }}"><b>{{ c.only_in_rebuilt }}</b><span>extra in rebuild</span></div>
     <div class="metric {{ 'warn' if c.text_mismatches else 'ok' }}"><b>{{ c.text_mismatches }}</b><span>text mismatches</span></div>

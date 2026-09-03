@@ -66,6 +66,21 @@ def _texts(elem):
     return [(t.text or "") for t in iter_local(elem, "t")]
 
 
+def _geometry(sp):
+    """Shape position/size (x, y, w, h) in points, token-invariant. Filling a
+    placeholder with text does NOT move the shape, so geometry is a stable
+    fingerprint for matching a filled slide back to its placeholder master."""
+    off = next((e for e in iter_local(sp, "off") if attr_local(e, "x") is not None), None)
+    ext = next((e for e in iter_local(sp, "ext") if attr_local(e, "cx") is not None), None)
+    if off is None or ext is None:
+        return None
+    try:
+        return (int(attr_local(off, "x")) // 12700, int(attr_local(off, "y")) // 12700,
+                int(attr_local(ext, "cx")) // 12700, int(attr_local(ext, "cy")) // 12700)
+    except (TypeError, ValueError):
+        return None
+
+
 def parse_shape(sp):
     """One top-level shape -> dict."""
     name = descr = None
@@ -85,6 +100,7 @@ def parse_shape(sp):
         "descr": descr,
         "ph_type": ph_type,
         "ph_idx": ph_idx,
+        "geom": _geometry(sp),
         "creation_ids": sorted(_creation_ids(sp)),
         "text": " ".join(texts).strip(),
         # smart-field marker: binding JSON is often stashed in name/descr
@@ -121,10 +137,17 @@ def parse_slide_xml(xml_bytes):
         all_cids.update(s["creation_ids"])
     all_text = " ".join(s["text"] for s in shapes if s["text"]).strip()
 
+    # token-invariant structural signature: (shape kind, placeholder, geometry)
+    geom_sig = frozenset(
+        (s["kind"], s["ph_type"] or "", s["geom"])
+        for s in shapes if s["geom"] is not None
+    )
+
     return {
         "slide_creation_id": slide_cid,
         "shapes": shapes,
         "shape_creation_ids": sorted(all_cids),
+        "geom_sig": geom_sig,
         "text": all_text,
         "placeholders": [
             (s["ph_type"] + ("#" + s["ph_idx"] if s["ph_idx"] else ""))
@@ -166,15 +189,17 @@ def _slide_order(zf, names):
 
 
 def _rels_targets(zf, names, slide_part):
-    """(embedded_images, external_targets) for a slide part."""
+    """(embedded_images, external_targets, layout_name) for a slide part."""
     base = os.path.basename(slide_part)
     rels = "ppt/slides/_rels/%s.rels" % base
     if rels not in names:
-        return [], []
+        return [], [], None
     raw = zf.read(rels).decode("utf-8", "ignore")
     imgs = [os.path.basename(t) for t in re.findall(r'Target="([^"]*media[^"]*)"', raw)]
     ext = re.findall(r'Target="(https?://[^"]+)"', raw)
-    return imgs, ext
+    lay = re.search(r'Target="([^"]*slideLayout[^"]*)"', raw)
+    layout = os.path.basename(lay.group(1)) if lay else None
+    return imgs, ext, layout
 
 
 def load_deck(path):
@@ -195,13 +220,14 @@ def load_deck(path):
             data = parse_slide_xml(zf.read(part))
         except Exception as e:
             data = {"slide_creation_id": None, "shapes": [], "shape_creation_ids": [],
-                    "text": "", "placeholders": [], "smartfields": [],
-                    "parse_error": str(e)}
-        imgs, ext = _rels_targets(zf, names, part)
+                    "geom_sig": frozenset(), "text": "", "placeholders": [],
+                    "smartfields": [], "parse_error": str(e)}
+        imgs, ext, layout = _rels_targets(zf, names, part)
         data["index"] = i
         data["part"] = part
         data["images"] = imgs
         data["external_links"] = ext
+        data["layout"] = layout
         slides.append(data)
 
     customxml = {n: zf.read(n).decode("utf-8", "ignore")
@@ -233,15 +259,34 @@ def jaccard(a, b):
     return len(a & b) / len(a | b)
 
 
+def struct_similarity(gen, mast):
+    """Layout + shape-geometry overlap. Token-invariant: filling placeholders
+    with text doesn't move shapes, so a filled generated slide still matches its
+    placeholder master slide here even when creationIds and text don't."""
+    gg, mg = gen.get("geom_sig"), mast.get("geom_sig")
+    if not gg or not mg:
+        return 0.0
+    j = jaccard(gg, mg)
+    # small boost when the two slides use the same slide layout
+    if gen.get("layout") and gen.get("layout") == mast.get("layout"):
+        j = min(1.0, j + 0.1)
+    return j
+
+
 def slide_similarity(gen, mast):
     """Score 0..1 that generated slide `gen` originated from master `mast`.
 
-    Prefers shape creationId overlap (token-invariant); falls back to text.
+    Tries, in order of reliability:
+      1. shape creationId overlap  (exact, when preserved),
+      2. layout + geometry overlap (survives placeholder filling),
+      3. text word overlap         (only for static slides).
+    Returns (method, score) for the best signal.
     """
     gcids, mcids = gen["shape_creation_ids"], mast["shape_creation_ids"]
     if gcids and mcids:
         j = jaccard(gcids, mcids)
         if j > 0:
             return ("creationId", j)
-    # fallback: text word overlap
-    return ("text", jaccard(word_set(gen["text"]), word_set(mast["text"])))
+    s = struct_similarity(gen, mast)
+    t = jaccard(word_set(gen["text"]), word_set(mast["text"]))
+    return ("structural", s) if s >= t else ("text", t)

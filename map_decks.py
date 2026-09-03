@@ -103,26 +103,38 @@ def pair_files(decks_dir, payloads_dir, manifest):
 
 # ---------------------------------------------------------------- matching
 def match_deck_to_master(gen_deck, master):
-    """For each generated slide, find best master slide. Returns list of matches
-    and the ordered set of matched master indices (the 'selection')."""
+    """For each generated slide, find its best master slide. Enforces one-to-one
+    matching (a master slide is claimed at most once) so that when many master
+    slides share the same layout/geometry we don't map two generated slides onto
+    the same master. Returns (matches, ordered selected master indices)."""
     m_slides = master["slides"]
-    matches = []
+    # score every generated<->master pair, then assign greedily best-first
+    scored = []
     for g in gen_deck["slides"]:
-        best_idx, best_method, best_score = None, None, 0.0
         for m in m_slides:
             method, score = pf.slide_similarity(g, m)
-            if score > best_score:
-                best_idx, best_method, best_score = m["index"], method, score
-        accepted = best_score >= MATCH_THRESHOLD
+            if score >= MATCH_THRESHOLD:
+                scored.append((score, method, g["index"], m["index"]))
+    scored.sort(reverse=True)
+    used_master, matched_gen = set(), {}
+    for score, method, gi, mi in scored:
+        if gi in matched_gen or mi in used_master:
+            continue
+        matched_gen[gi] = (mi, method, score)
+        used_master.add(mi)
+
+    matches = []
+    for g in gen_deck["slides"]:
+        mi = matched_gen.get(g["index"])
         matches.append({
             "gen_index": g["index"],
-            "master_index": best_idx if accepted else None,
-            "method": best_method,
-            "score": round(best_score, 3),
-            "accepted": accepted,
+            "master_index": mi[0] if mi else None,
+            "method": mi[1] if mi else None,
+            "score": round(mi[2], 3) if mi else 0.0,
+            "accepted": mi is not None,
             "gen_text_preview": g["text"][:80],
         })
-    selected = [m["master_index"] for m in matches if m["accepted"] and m["master_index"]]
+    selected = [m["master_index"] for m in matches if m["accepted"]]
     return matches, selected
 
 
@@ -234,10 +246,11 @@ def write_report(out_dir, master, per_deck, rules, all_tokens):
         acc = sum(1 for m in d["matches"] if m["accepted"])
         low = [m for m in d["matches"] if m["accepted"] and m["score"] < 0.6]
         cre = sum(1 for m in d["matches"] if m["method"] == "creationId" and m["accepted"])
-        lines.append("- `%s`: %d/%d slides matched (%d via creationId), "
+        stru = sum(1 for m in d["matches"] if m["method"] == "structural" and m["accepted"])
+        lines.append("- `%s`: %d/%d matched (%d creationId, %d structural), "
                      "%d unmatched, %d low-confidence(<0.6)"
                      % (d["deck"], acc, len(d["matches"]),
-                        cre, len(d["matches"]) - acc, len(low)))
+                        cre, stru, len(d["matches"]) - acc, len(low)))
     lines.append("")
     lines.append("> creationId matches are reliable. Many text-only or "
                  "low-confidence matches mean the master shapes lack creationIds "

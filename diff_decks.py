@@ -60,10 +60,12 @@ def diff(original_path, rebuilt_path):
     r_seq = [b["index"] for (_a, b, _m, _s) in pairs]
     order_ok = all(r_seq[i] <= r_seq[i + 1] for i in range(len(r_seq) - 1))
 
-    text_mismatches, image_mismatches, creationid_matches = [], [], 0
+    text_mismatches, image_mismatches, creationid_matches, structural_matches = [], [], 0, 0
     for a, b, method, score in pairs:
         if method == "creationId":
             creationid_matches += 1
+        elif method == "structural":
+            structural_matches += 1
         aw, bw = pf.word_set(a["text"]), pf.word_set(b["text"])
         if aw != bw:
             text_mismatches.append({
@@ -93,6 +95,7 @@ def diff(original_path, rebuilt_path):
             "rebuilt_slides": r["slide_count"],
             "matched": len(pairs),
             "via_creationId": creationid_matches,
+            "via_structural": structural_matches,
             "only_in_original": len(only_original),
             "only_in_rebuilt": len(only_rebuilt),
             "text_mismatches": len(text_mismatches),
