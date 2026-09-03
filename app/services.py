@@ -180,7 +180,7 @@ def _library_pairs():
     pairs = []
     for deck in list_decks():
         s = os.path.splitext(os.path.basename(deck))[0]
-        if s == stem:
+        if s == stem or config.is_test_stem(s):   # skip baseline + held-out test decks
             continue
         pj = config.PAYLOADS_DIR / (s + ".json")
         if pj.exists():
@@ -202,7 +202,7 @@ def build_library():
     try:
         m = harvest.build_library(str(baseline_pptx), read_payload(baseline_payload),
                                   pairs, config.active_asset_dir())
-        fields = sorted({d["field"] for d in m["deltas"]})
+        fields = sorted({f for d in m["deltas"] for f in (d.get("condition") or {})})
         return {"ok": True, "asset": config.active_asset_key(),
                 "log": "Harvested %d deltas across %d fields into asset '%s'."
                        % (len(m["deltas"]), len(fields), config.active_asset_key())}
@@ -218,7 +218,7 @@ def library_status():
     return {"asset": config.active_asset_key(),
             "baseline_slides": m.get("baseline_slides"),
             "deltas": len(m.get("deltas", [])),
-            "fields": sorted({d["field"] for d in m.get("deltas", [])})}
+            "fields": sorted({f for d in m.get("deltas", []) for f in (d.get("condition") or {})})}
 
 
 # ---------------------------------------------------------------- Reconstruct
@@ -232,7 +232,7 @@ def reconstruct(payload_path):
     out_path = str(config.OUTPUT_DIR / (stem + "_rebuilt.pptx"))
     try:
         res = harvest.assemble(config.active_asset_dir(), payload, out_path, verbose=False)
-        applied = ", ".join("%s=%s" % (f, v) for f, v in res["deltas_applied"]) or "(baseline only)"
+        applied = "; ".join(res["deltas_applied"]) or "(baseline only)"
         log = ("Assembled %d slides = %d baseline kept + %d harvested, %d dropped.\n"
                "Deltas applied: %s\nToken replacements: %d"
                % (res["total_slides"], res["kept"], res["added"], res["dropped"],

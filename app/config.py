@@ -35,6 +35,21 @@ LAST_LOG = DATA / "last_generation.log"      # stdout/stderr of the most recent 
 ASSETS_DIR = DATA / "assets"
 BASELINE_STEM = os.environ.get("BASELINE_STEM", "00_baseline")
 
+# Train/test split: payloads whose name starts with "test_" (or are listed in
+# data/test_set.txt) are HELD OUT of harvesting, so reconstructing them validates
+# the logic on inputs the library never saw. They can still be reconstructed and
+# diffed like any deck.
+TEST_PREFIX = "test_"
+
+def is_test_stem(stem):
+    if stem.startswith(TEST_PREFIX):
+        return True
+    tf = DATA / "test_set.txt"
+    if tf.exists():
+        listed = {ln.strip() for ln in tf.read_text(encoding="utf-8").splitlines() if ln.strip()}
+        return stem in listed
+    return False
+
 def active_asset_key():
     raw = subprocess_env().get("TEMPLAFY_ASSET_ID") or "template_01"
     safe = "".join(c for c in raw if c.isalnum() or c in ("-", "_", ".")).strip("._")

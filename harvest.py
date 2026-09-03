@@ -67,6 +67,12 @@ def _slug(field, value):
     return re.sub(r"[^A-Za-z0-9=._-]+", "_", s)[:120]
 
 
+def _condition_slug(condition):
+    """Folder-safe slug for a (possibly multi-field) delta condition."""
+    parts = ["%s=%s" % (k, v) for k, v in sorted(condition.items())]
+    return re.sub(r"[^A-Za-z0-9=._-]+", "_", "__".join(parts))[:150]
+
+
 # ---------------------------------------------------------------- alignment
 def _key(slide):
     """Cross-deck slide identity: its set of shape creationId GUIDs."""
@@ -143,19 +149,20 @@ def build_library(baseline_pptx, baseline_payload, pairs, asset_dir):
     for deck_path, payload_path in pairs:
         payload = _load_json(payload_path)
         diffs = varied_fields(flatten(payload), base_flat)
-        # OFAT: expect exactly one differing field (skip the fixed/compliance ones)
-        diffs = {k: v for k, v in diffs.items()
-                 if k not in ("I agree to comply with these policies",)}
-        if not diffs:
+        # the delta's CONDITION = every field that differs from baseline (a sector
+        # change drags sub-sector with it, so conditions can be multi-field). Skip
+        # the fixed/compliance field.
+        condition = {k: v for k, v in diffs.items()
+                     if k not in ("I agree to comply with these policies",)}
+        if not condition:
             continue
         deck = pf.load_deck(deck_path)
         added, removed = align(deck, base)
 
+        slug = _condition_slug(condition)
         adds_meta = []
         if added:
             # one block folder per delta (may hold several added slides)
-            field = sorted(diffs)[0]
-            slug = _slug(field, diffs[field])
             block_dir = os.path.join(blocks_root, slug)
             os.makedirs(os.path.join(block_dir, "media"), exist_ok=True)
             zf = zipfile.ZipFile(deck_path)
@@ -186,10 +193,10 @@ def build_library(baseline_pptx, baseline_payload, pairs, asset_dir):
             zf.close()
 
         deltas.append({
-            "field": sorted(diffs)[0],
-            "value": diffs[sorted(diffs)[0]],
+            "condition": condition,
+            "label": ", ".join("%s=%s" % (k, v) for k, v in sorted(condition.items())),
             "deck": os.path.basename(deck_path),
-            "block_slug": _slug(sorted(diffs)[0], diffs[sorted(diffs)[0]]) if added else None,
+            "block_slug": slug if added else None,
             "adds": adds_meta,
             "removes": [sorted(r) for r in removed],
         })
@@ -244,10 +251,12 @@ def _baseline_items(zf, names):
 
 
 def _applicable(manifest, payload_flat):
-    """Deltas whose (field == value) holds for this payload."""
+    """Deltas whose FULL condition holds for this payload (every field=value in
+    the condition must match)."""
     out = []
     for d in manifest["deltas"]:
-        if str(payload_flat.get(d["field"])) == str(d["value"]):
+        cond = d.get("condition") or {}
+        if cond and all(str(payload_flat.get(f)) == str(v) for f, v in cond.items()):
             out.append(d)
     return out
 
@@ -438,5 +447,5 @@ def assemble(asset_dir, payload, out_path, verbose=False):
         print("Assembled %s: %d kept + %d added (=%d), %d dropped, %d deltas, %d token reps"
               % (out_path, kept_n, add_n, kept_n + add_n, len(dropped), len(deltas), len(reps)))
     return {"out": out_path, "kept": kept_n, "added": add_n, "dropped": len(dropped),
-            "deltas_applied": [(d["field"], d["value"]) for d in deltas],
+            "deltas_applied": [d.get("label", "") for d in deltas],
             "tokens": len(reps), "total_slides": kept_n + add_n}

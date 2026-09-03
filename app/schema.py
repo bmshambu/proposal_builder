@@ -18,7 +18,7 @@ TEXT_FIELDS = {
 }
 
 # --- single-choice (enum) fields --------------------------------------------
-AUDIT_TAX_OPTIONS = ["Audit only", "Audit and Tax"]   # verify 2nd against --list-constraints
+AUDIT_TAX_OPTIONS = ["Audit only", "Audit & Tax"]
 NEW_CLIENT_OPTIONS = ["New Audit Client", "Expansion of Services"]
 
 SECTORS = [
