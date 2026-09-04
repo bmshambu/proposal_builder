@@ -144,6 +144,18 @@
     width:30px; height:30px; border-radius:8px; background:var(--accent-soft); color:var(--accent-ink);
     font-family:"IBM Plex Mono",monospace; font-weight:500; display:grid; place-items:center; font-size:.9rem}
 
+  .ctable-wrap{overflow-x:auto; margin:26px 0 8px}
+  .ctable{width:100%; border-collapse:collapse; font-size:.94rem; min-width:660px}
+  .ctable th{text-align:left; font-family:"IBM Plex Mono",monospace; font-size:.7rem; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--faint); padding:0 16px 10px; border-bottom:1px solid var(--line-strong)}
+  .ctable th:last-child{color:var(--accent-ink)}
+  .ctable td{padding:14px 16px; border-bottom:1px solid var(--line); vertical-align:top; color:var(--muted)}
+  .ctable td.c{color:var(--ink); font-weight:600; white-space:nowrap}
+  .ctable td:last-child{color:var(--ink)}
+  .ctable tr:last-child td{border-bottom:0}
+  .bar-callout{background:var(--accent-soft); border-left:3px solid var(--accent-ink);
+    border-radius:0 10px 10px 0; padding:16px 20px; font-size:1.04rem; color:var(--ink); margin-top:8px}
+
   footer{padding:40px 0 64px; color:var(--faint); font-size:.85rem}
   .foot-line{display:flex; gap:14px; flex-wrap:wrap; align-items:center}
   hr.soft{border:0; border-top:1px solid var(--line); margin:26px 0}
@@ -367,6 +379,32 @@
   <section>
     <div class="col">
       <div class="snum">06</div>
+      <h2>What &ldquo;done&rdquo; looks like &mdash; and what changes if we get the asset</h2>
+      <p>Today the engine learns the rules the hard way: generate many decks and compare them. If we obtain Templafy&rsquo;s actual <strong>library asset</strong> &mdash; the branded slide-blocks <em>and</em> the rules that bind each answer to a block and each field to a data source &mdash; the approach flips from <strong>black-box</strong> (infer the rules by observation) to <strong>white-box</strong> (import the blocks and rules directly). Cheaper to build, and <strong>complete instead of sampled</strong>.</p>
+    </div>
+
+    <div class="ctable-wrap">
+      <table class="ctable">
+        <thead><tr><th>Criterion</th><th>Today &middot; learned by observation</th><th>With the asset &middot; target</th></tr></thead>
+        <tbody>
+          <tr><td class="c">Coverage</td><td>the input values we sampled (~70 decks)</td><td><b>every valid input combination</b> &mdash; we hold every block, not just the ones we generated</td></tr>
+          <tr><td class="c">Fidelity</td><td>100% on tested payloads</td><td><b>&ge;&thinsp;99&ndash;100% slide-level match</b> on 30&ndash;50 real decks spanning all options, via the same Diff check</td></tr>
+          <tr><td class="c">Data-driven slides</td><td>~5 per deck differ (no data)</td><td>the bindings <b>name the source</b> for each &rarr; connect them &rarr; true <b>100%</b></td></tr>
+          <tr><td class="c">Independence</td><td>still using Templafy to learn</td><td><b>zero Templafy runtime</b> &mdash; a one-time export we then own</td></tr>
+          <tr><td class="c">Maintainability</td><td>re-generate + re-harvest on change</td><td><b>re-import</b> the asset (minutes)</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="col">
+      <div class="bar-callout">The bar, in one line: <strong>reproduce any proposal deck byte-faithfully for any valid input</strong>, validated at &ge;&thinsp;99% slide-level match on a diverse sample, with no Templafy license &mdash; data-driven slides included once their named sources are connected.</div>
+      <p class="muted" style="margin-top:18px"><b>One honest caveat:</b> the asset gives the block <em>templates</em> (with smart-field placeholders), not the <em>live data</em>. Fees, partner names and RFP content still come from connected systems &mdash; but the asset hands us the exact map of which source feeds which slide, turning that last mile from research into wiring.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="col">
+      <div class="snum">07</div>
       <h2>Extending to other templates</h2>
       <p>This POC covers <strong>one template</strong> (the public-audit proposal). The engine itself is <strong>template-agnostic</strong>&mdash;it learns from whatever decks you give it. Onboarding another template (a different service line, a new region, a refreshed brand) is a <strong>data task, not an engineering task</strong>:</p>
       <ol class="steps">
