@@ -114,6 +114,15 @@ def _slide_rels_name(part):
     return "ppt/slides/_rels/%s.rels" % os.path.basename(part)
 
 
+def _resolve_part(base_dir, target):
+    """Resolve a relationship Target to a package part path. Handles absolute
+    targets ('/ppt/...') that some decks (incl. Templafy) use, as well as the
+    usual relative ('../media/x.png') form."""
+    if target.startswith("/"):
+        return target[1:]
+    return os.path.normpath(os.path.join(base_dir, target)).replace("\\", "/")
+
+
 def _media_targets(rels_xml):
     """[(rId, target)] for media relationships in a slide's rels."""
     out = []
@@ -170,7 +179,7 @@ def _harvest_slide(zf, names, part, dest_dir):
     sdir = os.path.dirname(part)
     media = []
     for rid, tgt in _media_targets(rels_xml):
-        mp = os.path.normpath(os.path.join(sdir, tgt)).replace("\\", "/")
+        mp = _resolve_part(sdir, tgt)
         if mp in names:
             mb = os.path.basename(mp)
             with open(os.path.join(dest_dir, "media", mb), "wb") as fh:
@@ -183,7 +192,7 @@ def _harvest_slide(zf, names, part, dest_dir):
     deps = []
     os.makedirs(os.path.join(dest_dir, "deps"), exist_ok=True)
     for rid, tgt in _content_targets(rels_xml):
-        dp = os.path.normpath(os.path.join(sdir, tgt)).replace("\\", "/")
+        dp = _resolve_part(sdir, tgt)
         if dp in names:
             stored = os.path.basename(part)[:-4] + "__" + os.path.basename(dp)
             with open(os.path.join(dest_dir, "deps", stored), "wb") as fh:
@@ -202,7 +211,7 @@ def _harvest_slide(zf, names, part, dest_dir):
     layout = None
     lm = re.search(r'Target="([^"]*slideLayout[^"]*)"', rels_xml)
     if lm:
-        lpart = os.path.normpath(os.path.join("ppt/slides", lm.group(1))).replace("\\", "/")
+        lpart = _resolve_part(sdir, lm.group(1))
         if lpart in names:
             lname = os.path.basename(lpart)
             ldir = os.path.join(dest_dir, "layouts")
@@ -211,7 +220,7 @@ def _harvest_slide(zf, names, part, dest_dir):
             lrels_xml = zf.read(lrels_name).decode("utf-8", "ignore") if lrels_name in names else ""
             lmedia = []
             for rid, tgt in _media_targets(lrels_xml):
-                mp = os.path.normpath(os.path.join("ppt/slideLayouts", tgt)).replace("\\", "/")
+                mp = _resolve_part("ppt/slideLayouts", tgt)
                 if mp in names:
                     mb = os.path.basename(mp)
                     with open(os.path.join(ldir, "media", mb), "wb") as fh:
