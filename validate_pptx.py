@@ -59,9 +59,18 @@ def validate(path):
     default_exts = set(m.lower() for m in re.findall(r'<Default[^>]*Extension="([^"]+)"', ct))
     overrides = set(re.findall(r'<Override[^>]*PartName="([^"]+)"', ct))
 
+    # these part types MUST carry a specific Override — the generic ".xml" Default
+    # is not enough, and PowerPoint will offer to repair if it's missing.
+    _needs_override = ("ppt/slidemasters/", "ppt/slidelayouts/", "ppt/theme/",
+                       "ppt/slides/", "ppt/notesslides/", "ppt/notesmasters/")
+
     def has_content_type(part):
-        if "/" + part in overrides or part in overrides:
+        has_override = ("/" + part in overrides) or (part in overrides)
+        if has_override:
             return True
+        p = part.lower()
+        if p.endswith(".xml") and any(p.startswith(d) for d in _needs_override):
+            return False        # needs a real Override, not the xml Default
         ext = os.path.splitext(part)[1].lstrip(".").lower()
         return ext in default_exts
 

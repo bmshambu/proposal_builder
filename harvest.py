@@ -164,14 +164,42 @@ def _content_targets(rels_xml):
     return out
 
 
+def _infer_ctype(part):
+    """Content type for the standard presentation parts, inferred from the path.
+    A safety net for when a deck's [Content_Types].xml can't be parsed for it."""
+    p = part.lower()
+    if not p.endswith(".xml"):
+        return None
+    base = "application/vnd.openxmlformats-officedocument.presentationml."
+    if "/slidemasters/" in p:  return base + "slideMaster+xml"
+    if "/slidelayouts/" in p:  return base + "slideLayout+xml"
+    if "/notesmasters/" in p:  return base + "notesMaster+xml"
+    if "/notesslides/" in p:   return base + "notesSlide+xml"
+    if "/slides/" in p:        return base + "slide+xml"
+    if "/theme/" in p:         return "application/vnd.openxmlformats-officedocument.theme+xml"
+    return None
+
+
 def _ctype_for(ct_xml, part):
-    """The content type declared for `part` in a deck's [Content_Types].xml."""
-    m = re.search(r'<Override[^>]*PartName="/%s"[^>]*ContentType="([^"]+)"'
-                  % re.escape(part), ct_xml)
-    if m:
-        return m.group(1)
+    """The content type declared for `part` in a deck's [Content_Types].xml.
+    Attribute order isn't guaranteed, so match the Override tag by PartName and
+    read ContentType from it regardless of order; fall back to the ext Default,
+    then to a path-based inference for the standard part types."""
+    want = "/" + part.lstrip("/")
+    for m in re.finditer(r'<Override\b[^>]*/>', ct_xml):
+        tag = m.group(0)
+        pn = re.search(r'PartName="([^"]+)"', tag)
+        if pn and pn.group(1) == want:
+            ct = re.search(r'ContentType="([^"]+)"', tag)
+            if ct:
+                return ct.group(1)
+    # standard presentation parts need their SPECIFIC type, never the generic
+    # xml Default — so infer from the path before falling back to a Default.
+    inferred = _infer_ctype(part)
+    if inferred:
+        return inferred
     ext = os.path.splitext(part)[1].lstrip(".").lower()
-    d = re.search(r'<Default[^>]*Extension="%s"[^>]*ContentType="([^"]+)"'
+    d = re.search(r'<Default\b[^>]*Extension="%s"[^>]*ContentType="([^"]+)"'
                   % re.escape(ext), ct_xml, re.I)
     return d.group(1) if d else None
 
@@ -853,6 +881,7 @@ def assemble(asset_dir, payload, out_path, verbose=False):
         for p, c in dep_overrides if ('PartName="/%s"' % p) not in ct)
     for _mp, info in prepared_masters.items():   # content types for master closures
         for path, ctv in info["ctypes"].items():
+            ctv = _infer_ctype(path) or ctv     # correct type for master/layout/theme
             if ctv and ('PartName="/%s"' % path) not in ct and ('PartName="/%s"' % path) not in add_overrides:
                 add_overrides += '<Override PartName="/%s" ContentType="%s"/>' % (path, ctv)
     # ensure media Defaults exist
