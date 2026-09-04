@@ -127,6 +127,39 @@ def _media_targets(rels_xml):
     return out
 
 
+# non-image content parts a slide can embed (OLE objects, packages, charts, ...).
+# Excludes shared/template parts and the ones handled elsewhere (image, layout).
+_CONTENT_EXCLUDE = ("/image", "slideLayout", "slideMaster", "notesSlide",
+                    "notesMaster", "/theme", "hyperlink", "comments", "/tags",
+                    "customXml")
+
+
+def _content_targets(rels_xml):
+    """[(rId, target)] for embedded content parts (OLE objects, charts, ...)."""
+    out = []
+    for m in re.finditer(r'<Relationship\b[^>]*?/>', rels_xml):
+        tag = m.group(0)
+        if 'TargetMode="External"' in tag or any(x in tag for x in _CONTENT_EXCLUDE):
+            continue
+        rid = re.search(r'Id="([^"]+)"', tag)
+        tgt = re.search(r'Target="([^"]+)"', tag)
+        if rid and tgt and "media" not in tgt.group(1):
+            out.append((rid.group(1), tgt.group(1)))
+    return out
+
+
+def _ctype_for(ct_xml, part):
+    """The content type declared for `part` in a deck's [Content_Types].xml."""
+    m = re.search(r'<Override[^>]*PartName="/%s"[^>]*ContentType="([^"]+)"'
+                  % re.escape(part), ct_xml)
+    if m:
+        return m.group(1)
+    ext = os.path.splitext(part)[1].lstrip(".").lower()
+    d = re.search(r'<Default[^>]*Extension="%s"[^>]*ContentType="([^"]+)"'
+                  % re.escape(ext), ct_xml, re.I)
+    return d.group(1) if d else None
+
+
 def _harvest_slide(zf, names, part, dest_dir):
     """Copy one slide's XML + rels + media out of a deck into dest_dir.
     Returns {slide_file, media:[{rid,file}]}."""
@@ -134,14 +167,30 @@ def _harvest_slide(zf, names, part, dest_dir):
     slide_xml = zf.read(part)
     rels_name = _slide_rels_name(part)
     rels_xml = zf.read(rels_name).decode("utf-8", "ignore") if rels_name in names else ""
+    sdir = os.path.dirname(part)
     media = []
     for rid, tgt in _media_targets(rels_xml):
-        mp = os.path.normpath(os.path.join("ppt/slides", tgt)).replace("\\", "/")
+        mp = os.path.normpath(os.path.join(sdir, tgt)).replace("\\", "/")
         if mp in names:
             mb = os.path.basename(mp)
             with open(os.path.join(dest_dir, "media", mb), "wb") as fh:
                 fh.write(zf.read(mp))
             media.append({"rid": rid, "file": mb})
+
+    # embedded content parts (OLE objects, etc.) referenced by the slide, with
+    # their content types, so we can re-declare them in the assembled deck.
+    ct_xml = zf.read("[Content_Types].xml").decode("utf-8", "ignore") if "[Content_Types].xml" in names else ""
+    deps = []
+    os.makedirs(os.path.join(dest_dir, "deps"), exist_ok=True)
+    for rid, tgt in _content_targets(rels_xml):
+        dp = os.path.normpath(os.path.join(sdir, tgt)).replace("\\", "/")
+        if dp in names:
+            stored = os.path.basename(part)[:-4] + "__" + os.path.basename(dp)
+            with open(os.path.join(dest_dir, "deps", stored), "wb") as fh:
+                fh.write(zf.read(dp))
+            deps.append({"rid": rid, "target": tgt, "orig": dp,
+                         "stored": stored, "ctype": _ctype_for(ct_xml, dp)})
+
     sf = os.path.basename(part)
     with open(os.path.join(dest_dir, sf), "wb") as fh:
         fh.write(slide_xml)
@@ -173,7 +222,7 @@ def _harvest_slide(zf, names, part, dest_dir):
             with open(os.path.join(ldir, lname + ".rels"), "w", encoding="utf-8") as fh:
                 fh.write(lrels_xml)
             layout = {"name": lname, "media": lmedia}
-    return {"slide_file": sf, "media": media, "layout": layout}
+    return {"slide_file": sf, "media": media, "layout": layout, "deps": deps}
 
 
 def build_library(baseline_pptx, baseline_payload, pairs, asset_dir):
@@ -468,7 +517,26 @@ def assemble(asset_dir, payload, out_path, verbose=False):
     prepared_adds = {}     # anchor_key(frozenset) -> list of prepared add dicts
     new_media_parts = {}   # part -> bytes
     ct_new_slide_parts = []
+    dep_overrides = []     # (new_part, content_type) for copied embedded objects
     slug_seen = 0
+
+    def _inject_deps(meta, block_dir, rels_str):
+        """Copy a harvested slide's embedded content parts (OLE, etc.) under
+        unique names, retarget its rels, and return the updated rels string."""
+        for dep in meta.get("deps", []):
+            src = os.path.join(block_dir, "deps", dep["stored"])
+            if not os.path.exists(src):
+                continue
+            base = os.path.basename(dep["orig"])
+            new_base = "hv%d_%s" % (len(new_media_parts) + 1, base)
+            new_part = os.path.dirname(dep["orig"]) + "/" + new_base
+            new_media_parts[new_part] = open(src, "rb").read()
+            old_t = dep["target"]
+            new_t = (old_t.rsplit("/", 1)[0] + "/" + new_base) if "/" in old_t else new_base
+            rels_str = rels_str.replace('Target="%s"' % old_t, 'Target="%s"' % new_t)
+            if dep.get("ctype"):
+                dep_overrides.append((new_part, dep["ctype"]))
+        return rels_str
 
     for d in deltas:
         if not d["adds"]:
@@ -496,6 +564,7 @@ def assemble(asset_dir, payload, out_path, verbose=False):
                                             'Target="../media/%s"' % new_name)
                 add_rels = add_rels.replace('Target="/ppt/media/%s"' % mrec["file"],
                                             'Target="../media/%s"' % new_name)
+            add_rels = _inject_deps(a, block_dir, add_rels)
             add_rels_final = _rels_for_slide(slide_xml, add_rels)
             prepared_adds.setdefault(frozenset(a["anchor_key"]), []).append({
                 "part": new_part,
@@ -529,6 +598,7 @@ def assemble(asset_dir, payload, out_path, verbose=False):
                 new_media_parts["ppt/media/" + new_name] = open(src, "rb").read()
                 swap_rels = swap_rels.replace('Target="../media/%s"' % mrec["file"],
                                               'Target="../media/%s"' % new_name)
+            swap_rels = _inject_deps(sw, block_dir, swap_rels)
             swap_rels_final = _rels_for_slide(swap_xml, swap_rels)
             swap_by_part[part] = {"xml": _apply_tokens(swap_xml, reps), "rels": swap_rels_final}
     swap_rels_by_name = {"ppt/slides/_rels/%s.rels" % os.path.basename(p): v["rels"]
@@ -641,6 +711,9 @@ def assemble(asset_dir, payload, out_path, verbose=False):
     add_overrides += "".join(          # content type for any added slide layouts
         '<Override PartName="/%s" ContentType="application/vnd.openxmlformats-'
         'officedocument.presentationml.slideLayout+xml"/>' % p for p in prepared_layouts)
+    add_overrides += "".join(          # content type for any copied embedded objects
+        '<Override PartName="/%s" ContentType="%s"/>' % (p, c)
+        for p, c in dep_overrides if ('PartName="/%s"' % p) not in ct)
     # ensure media Defaults exist
     exts = {os.path.splitext(p)[1].lstrip(".").lower() for p in new_media_parts}
     default_ct = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
