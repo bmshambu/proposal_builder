@@ -169,6 +169,42 @@ def _ctype_for(ct_xml, part):
     return d.group(1) if d else None
 
 
+def _copy_closure(zf, names, start_part, dest_root, ct_xml,
+                  exclude=("notesSlide", "comments", "/tags")):
+    """Copy `start_part` and all its internal dependencies (their .rels too) under
+    dest_root, mirroring original package paths. Used to bring a whole slideMaster
+    subtree (master + theme + its layouts + media). Returns {orig_part: ctype} for
+    non-.rels parts, for re-declaring content types in the assembled deck."""
+    ctypes, seen, stack = {}, set(), [start_part]
+    while stack:
+        p = stack.pop()
+        if p in seen or p not in names:
+            continue
+        seen.add(p)
+        out = os.path.join(dest_root, p)
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        with open(out, "wb") as fh:
+            fh.write(zf.read(p))
+        if not p.endswith(".rels"):
+            ctypes[p] = _ctype_for(ct_xml, p)
+        rels_name = os.path.dirname(p) + "/_rels/" + os.path.basename(p) + ".rels"
+        if rels_name in names:
+            os.makedirs(os.path.dirname(os.path.join(dest_root, rels_name)), exist_ok=True)
+            with open(os.path.join(dest_root, rels_name), "wb") as fh:
+                fh.write(zf.read(rels_name))
+            for m in re.finditer(r'<Relationship\b[^>]*?/>',
+                                 zf.read(rels_name).decode("utf-8", "ignore")):
+                tag = m.group(0)
+                if 'TargetMode="External"' in tag or any(x in tag for x in exclude):
+                    continue
+                tg = re.search(r'Target="([^"]+)"', tag)
+                if tg:
+                    tgt = _resolve_part(os.path.dirname(p), tg.group(1))
+                    if tgt in names:
+                        stack.append(tgt)
+    return ctypes
+
+
 def _harvest_slide(zf, names, part, dest_dir):
     """Copy one slide's XML + rels + media out of a deck into dest_dir.
     Returns {slide_file, media:[{rid,file}]}."""
@@ -230,7 +266,17 @@ def _harvest_slide(zf, names, part, dest_dir):
                 fh.write(zf.read(lpart))
             with open(os.path.join(ldir, lname + ".rels"), "w", encoding="utf-8") as fh:
                 fh.write(lrels_xml)
-            layout = {"name": lname, "media": lmedia}
+            # the layout's slideMaster (+ its theme/layouts) — the baseline deck may
+            # not include this master (the template has several); copy its closure.
+            master = None
+            mm = re.search(r'Target="([^"]*slideMaster[^"]*)"', lrels_xml)
+            if mm:
+                mpart = _resolve_part("ppt/slideLayouts", mm.group(1))
+                if mpart in names:
+                    ctypes = _copy_closure(zf, names, mpart,
+                                           os.path.join(dest_dir, "master"), ct_xml)
+                    master = {"name": os.path.basename(mpart), "ctypes": ctypes}
+            layout = {"name": lname, "media": lmedia, "master": master}
     return {"slide_file": sf, "media": media, "layout": layout, "deps": deps}
 
 
@@ -613,6 +659,35 @@ def assemble(asset_dir, payload, out_path, verbose=False):
     swap_rels_by_name = {"ppt/slides/_rels/%s.rels" % os.path.basename(p): v["rels"]
                          for p, v in swap_by_part.items()}
 
+    # missing slide MASTERS: a harvested layout may belong to a master (+ its theme
+    # and its own layouts) the baseline lacks -> copy the whole master closure.
+    prepared_masters = {}      # master_part -> {"files":{path:bytes}, "ctypes":{...}}
+    covered_parts = set()      # parts already included via an added master closure
+    for d in deltas:
+        if not d.get("block_slug"):
+            continue
+        bdir = os.path.join(asset_dir, "blocks", d["block_slug"])
+        sources = [(a, bdir) for a in d.get("adds", [])]
+        sources += [(sw, os.path.join(bdir, "swaps")) for sw in d.get("swaps", [])]
+        for meta, base in sources:
+            lay = meta.get("layout")
+            m = lay.get("master") if lay else None
+            if not m:
+                continue
+            mpart = "ppt/slideMasters/" + m["name"]
+            if mpart in names or mpart in prepared_masters:
+                continue
+            mroot = os.path.join(base, "master")
+            if not os.path.isdir(mroot):
+                continue
+            files = {}
+            for root, _dirs, fs in os.walk(mroot):
+                for f in fs:
+                    fp = os.path.join(root, f)
+                    files[os.path.relpath(fp, mroot).replace("\\", "/")] = open(fp, "rb").read()
+            prepared_masters[mpart] = {"files": files, "ctypes": m.get("ctypes", {})}
+            covered_parts.update(files.keys())
+
     # missing slide layouts: a harvested add/swap may use a layout the baseline
     # pruned -> add it (with its media) so its slide->layout rel resolves.
     prepared_layouts = {}      # "ppt/slideLayouts/<name>" -> {"xml","rels"}
@@ -628,8 +703,8 @@ def assemble(asset_dir, payload, out_path, verbose=False):
             if not lay:
                 continue
             part = "ppt/slideLayouts/" + lay["name"]
-            if part in names or part in prepared_layouts:
-                continue        # baseline already has it, or already added
+            if part in names or part in prepared_layouts or part in covered_parts:
+                continue        # baseline has it, already added, or in a master closure
             lpath = os.path.join(ldir, lay["name"])
             if not os.path.exists(lpath):
                 continue
@@ -686,10 +761,26 @@ def assemble(asset_dir, payload, out_path, verbose=False):
                 % (rid, os.path.basename(obj["part"])))
         sld_entries.append('<p:sldId id="%d" r:id="%s"/>' % (256 + i, rid))
 
-    # presentation.xml: swap the sldIdLst body
+    # register any added slide masters in the presentation
+    master_sld_entries, master_rel_entries, mid = [], [], 2147483650
+    for mp in prepared_masters:
+        rid_n += 1
+        rid = "rId%d" % rid_n
+        master_rel_entries.append(
+            '<Relationship Id="%s" Type="http://schemas.openxmlformats.org/'
+            'officeDocument/2006/relationships/slideMaster" Target="slideMasters/%s"/>'
+            % (rid, os.path.basename(mp)))
+        master_sld_entries.append('<p:sldMasterId id="%d" r:id="%s"/>' % (mid, rid))
+        mid += 1
+
+    # presentation.xml: swap the sldIdLst body, and register new masters
     new_prs = re.sub(r'<p:sldIdLst>.*?</p:sldIdLst>',
                      '<p:sldIdLst>' + "".join(sld_entries) + '</p:sldIdLst>',
                      prs_xml, flags=re.DOTALL)
+    if master_sld_entries:
+        new_prs = re.sub(r'</p:sldMasterIdLst>',
+                         "".join(master_sld_entries) + '</p:sldMasterIdLst>',
+                         new_prs, count=1)
 
     # presentation.xml.rels: drop removed slides' rels, add new ones
     kept_parts = {os.path.basename(o["part"]) for k, o in final if k == "keep"}
@@ -703,7 +794,7 @@ def assemble(asset_dir, payload, out_path, verbose=False):
     new_rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                 '<Relationships xmlns="http://schemas.openxmlformats.org/package/'
                 '2006/relationships">' + rels_body + "".join(slide_rels_entries)
-                + "</Relationships>")
+                + "".join(master_rel_entries) + "</Relationships>")
 
     # [Content_Types].xml: drop removed slide overrides, add new ones + media defaults
     ct = _read(zf, "[Content_Types].xml")
@@ -723,6 +814,10 @@ def assemble(asset_dir, payload, out_path, verbose=False):
     add_overrides += "".join(          # content type for any copied embedded objects
         '<Override PartName="/%s" ContentType="%s"/>' % (p, c)
         for p, c in dep_overrides if ('PartName="/%s"' % p) not in ct)
+    for _mp, info in prepared_masters.items():   # content types for master closures
+        for path, ctv in info["ctypes"].items():
+            if ctv and ('PartName="/%s"' % path) not in ct and ('PartName="/%s"' % path) not in add_overrides:
+                add_overrides += '<Override PartName="/%s" ContentType="%s"/>' % (path, ctv)
     # ensure media Defaults exist
     exts = {os.path.splitext(p)[1].lstrip(".").lower() for p in new_media_parts}
     default_ct = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
@@ -770,6 +865,13 @@ def assemble(asset_dir, payload, out_path, verbose=False):
         for part, o in prepared_layouts.items():
             out.writestr(part, o["xml"])
             out.writestr("ppt/slideLayouts/_rels/%s.rels" % os.path.basename(part), o["rels"])
+        # add any missing slide masters (whole closure: master + theme + layouts)
+        written_master_parts = set()
+        for _mp, info in prepared_masters.items():
+            for path, data in info["files"].items():
+                if path not in written_master_parts:
+                    out.writestr(path, data)
+                    written_master_parts.add(path)
         for part, data in new_media_parts.items():
             out.writestr(part, data)
     zf.close()
