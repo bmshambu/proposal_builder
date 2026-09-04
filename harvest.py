@@ -506,6 +506,19 @@ def _xml_escape(s):
     return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
+def _strip_custdata(xml):
+    """Remove Templafy customer-data tag references (<p:custDataLst> holding
+    <p:tags r:id=...>). We don't carry the ppt/tags/* parts, so leaving the
+    reference dangles the relationship (REL_TARGET_MISSING); and since several
+    harvested slides point at the SAME baseline tag part, keeping them also
+    duplicates the reference (PPT_SLIDE_TAG_REF_DUPLICATE). The tags are
+    non-visual Templafy metadata, so dropping them yields a clean deck. Once the
+    reference is gone, _rels_for_slide drops the now-unreferenced tag rel."""
+    xml = re.sub(r'<p:custDataLst>.*?</p:custDataLst>', '', xml, flags=re.DOTALL)
+    xml = re.sub(r'<p:custDataLst\b[^>]*/>', '', xml)
+    return xml
+
+
 def _rels_for_slide(slide_xml, rels_xml):
     """Build a slide's .rels keeping the slideLayout rel PLUS every relationship
     the slide XML actually references (by r:id / r:embed / r:link). Dropping a
@@ -582,7 +595,12 @@ def _apply_tokens(xml, reps):
             return m.group(0)
         return m.group(1) + _xml_escape(new) + m.group(3)
 
-    return re.sub(r'(<a:t[^>]*>)(.*?)(</a:t>)', repl, xml, flags=re.DOTALL)
+    # Match ONLY the real drawingml text element <a:t>. The char after "a:t" must
+    # be whitespace (attributes follow) or the closing ">" — never a letter — so
+    # this never matches <a:tbl>, <a:tc>, <a:tr>, <a:tblPr>, <a:tab>, <a:tabLst>,
+    # etc. (A loose <a:t[^>]*> matched those, then swallowed and escaped the whole
+    # table markup up to the next </a:t> — corrupting every table slide.)
+    return re.sub(r'(<a:t(?:\s[^>]*)?>)(.*?)(</a:t>)', repl, xml, flags=re.DOTALL)
 
 
 def assemble(asset_dir, payload, out_path, verbose=False):
@@ -643,6 +661,7 @@ def assemble(asset_dir, payload, out_path, verbose=False):
             if not os.path.exists(slide_path):
                 continue
             slide_xml = open(slide_path, "rb").read().decode("utf-8", "ignore")
+            slide_xml = _strip_custdata(slide_xml)     # drop Templafy tag refs we don't carry
             rels_path = slide_path + ".rels"
             add_rels = open(rels_path, encoding="utf-8").read() if os.path.exists(rels_path) else ""
             max_slide_n += 1
@@ -683,6 +702,7 @@ def assemble(asset_dir, payload, out_path, verbose=False):
             if not os.path.exists(slide_path):
                 continue
             swap_xml = open(slide_path, "rb").read().decode("utf-8", "ignore")
+            swap_xml = _strip_custdata(swap_xml)       # drop Templafy tag refs we don't carry
             rels_path = slide_path + ".rels"
             swap_rels = open(rels_path, encoding="utf-8").read() if os.path.exists(rels_path) else ""
             for mrec in sw["media"]:
@@ -810,15 +830,25 @@ def assemble(asset_dir, payload, out_path, verbose=False):
         for a in prepared_adds.get(it["key"], []):
             final.append(("add", a))
 
-    # assign rIds + sldIds
+    # assign rIds + sldIds. New relationship ids must be unique against EVERY id
+    # already in presentation.xml.rels — Templafy uses GUID-style ids, so counting
+    # only "rIdN" ids is unreliable and would risk a duplicate (REL_ID_INVALID).
+    existing_ids = set(re.findall(r'Id="([^"]+)"', rels_xml))
+    _ctr = [0]
+    def _new_rid():
+        while True:
+            _ctr[0] += 1
+            cand = "rId%d" % _ctr[0]
+            if cand not in existing_ids:
+                existing_ids.add(cand)
+                return cand
+
     sld_entries, slide_rels_entries = [], []
-    rid_n = max_rid
     for i, (kind, obj) in enumerate(final):
         if kind == "keep":
             rid = obj["rid"]
         else:
-            rid_n += 1
-            rid = "rId%d" % rid_n
+            rid = _new_rid()
             obj["rid"] = rid
             slide_rels_entries.append(
                 '<Relationship Id="%s" Type="http://schemas.openxmlformats.org/'
@@ -826,11 +856,12 @@ def assemble(asset_dir, payload, out_path, verbose=False):
                 % (rid, os.path.basename(obj["part"])))
         sld_entries.append('<p:sldId id="%d" r:id="%s"/>' % (256 + i, rid))
 
-    # register any added slide masters in the presentation
-    master_sld_entries, master_rel_entries, mid = [], [], 2147483650
+    # register any added slide masters — id above the existing master ids.
+    existing_mids = [int(x) for x in re.findall(r'<p:sldMasterId\b[^>]*id="(\d+)"', prs_xml)]
+    mid = max(existing_mids + [2147483648]) + 1
+    master_sld_entries, master_rel_entries = [], []
     for mp in prepared_masters:
-        rid_n += 1
-        rid = "rId%d" % rid_n
+        rid = _new_rid()
         master_rel_entries.append(
             '<Relationship Id="%s" Type="http://schemas.openxmlformats.org/'
             'officeDocument/2006/relationships/slideMaster" Target="slideMasters/%s"/>'

@@ -21,6 +21,7 @@ won't open:
 import os
 import re
 import sys
+import xml.parsers.expat
 import zipfile
 
 
@@ -54,6 +55,18 @@ def validate(path):
             issues.append(("duplicate-part", n, "appears more than once in the package"))
         seen.add(n)
 
+    # XML well-formedness: a malformed slide/part makes PowerPoint say the content
+    # is unreadable (XML_MALFORMED) and offer to repair. A valid ZIP with valid
+    # rels can still hold a broken slide, so parse every xml/rels part.
+    for n in names:
+        if not (n.endswith(".xml") or n.endswith(".rels")):
+            continue
+        p = xml.parsers.expat.ParserCreate()
+        try:
+            p.Parse(zf.read(n), True)
+        except xml.parsers.expat.ExpatError as e:
+            issues.append(("xml-malformed", n, "not well-formed XML: %s" % e))
+
     # content types
     ct = zf.read("[Content_Types].xml").decode("utf-8", "ignore") if "[Content_Types].xml" in nameset else ""
     default_exts = set(m.lower() for m in re.findall(r'<Default[^>]*Extension="([^"]+)"', ct))
@@ -81,12 +94,16 @@ def validate(path):
             continue
         owner = _part_for_rels(n)
         raw = zf.read(n).decode("utf-8", "ignore")
-        ids = set()
+        ids, seen_rid = set(), set()
         for m in re.finditer(r'<Relationship\b[^>]*?/>', raw):
             tag = m.group(0)
             rid = re.search(r'Id="([^"]+)"', tag)
             tgt = re.search(r'Target="([^"]+)"', tag)
             if rid:
+                if rid.group(1) in seen_rid:
+                    issues.append(("duplicate-rel-id", n,
+                                   "relationship Id %s used more than once" % rid.group(1)))
+                seen_rid.add(rid.group(1))
                 ids.add(rid.group(1))
             external = 'TargetMode="External"' in tag
             if tgt and not external:
@@ -125,6 +142,15 @@ def validate(path):
             if m.group(1) not in prs_ids:
                 issues.append(("missing-slide-rel", "ppt/presentation.xml",
                                "sldId uses %s but it's not in presentation.xml.rels" % m.group(1)))
+        # slide / master ids must each be unique
+        for what, pat in (("sldId", r'<p:sldId\b[^>]*\bid="(\d+)"'),
+                          ("sldMasterId", r'<p:sldMasterId\b[^>]*\bid="(\d+)"')):
+            seen = set()
+            for m in re.finditer(pat, prs):
+                if m.group(1) in seen:
+                    issues.append(("duplicate-id", "ppt/presentation.xml",
+                                   "%s id %s used more than once" % (what, m.group(1))))
+                seen.add(m.group(1))
     zf.close()
     return issues
 
