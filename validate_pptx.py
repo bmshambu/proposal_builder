@@ -25,7 +25,11 @@ import zipfile
 
 
 def _resolve(base_part, target):
-    """Resolve a relationship Target relative to the part that owns the .rels."""
+    """Resolve a relationship Target to a package part name.
+    A target starting with '/' is package-absolute (relative to the zip root);
+    otherwise it's relative to the directory of the part that owns the .rels."""
+    if target.startswith("/"):
+        return target[1:]
     base_dir = os.path.dirname(base_part)
     return os.path.normpath(os.path.join(base_dir, target)).replace("\\", "/")
 
