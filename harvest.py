@@ -670,6 +670,7 @@ def assemble(asset_dir, payload, out_path, verbose=False):
     # and its own layouts) the baseline lacks -> copy the whole master closure.
     prepared_masters = {}      # master_part -> {"files":{path:bytes}, "ctypes":{...}}
     covered_parts = set()      # parts already included via an added master closure
+    mstr_ct = 0
     for d in deltas:
         if not d.get("block_slug"):
             continue
@@ -692,7 +693,30 @@ def assemble(asset_dir, payload, out_path, verbose=False):
                 for f in fs:
                     fp = os.path.join(root, f)
                     files[os.path.relpath(fp, mroot).replace("\\", "/")] = open(fp, "rb").read()
-            prepared_masters[mpart] = {"files": files, "ctypes": m.get("ctypes", {})}
+            ctypes = dict(m.get("ctypes", {}))
+            # remap any closure part that COLLIDES with an existing part (theme/layout
+            # background images share ppt/media/ names with the baseline) so it isn't
+            # written twice; then patch the closure's own rels to the new names.
+            remap = {}
+            for path in list(files):
+                if path.endswith(".rels") or path == mpart:
+                    continue
+                if path in names or path in new_media_parts or path in covered_parts:
+                    mstr_ct += 1
+                    b2 = os.path.basename(path)
+                    remap[path] = "%s/hvm%d_%s" % (os.path.dirname(path), mstr_ct, b2)
+            for old, new in remap.items():
+                files[new] = files.pop(old)
+                if old in ctypes:
+                    ctypes[new] = ctypes.pop(old)
+            if remap:
+                for path in list(files):
+                    if path.endswith(".rels"):
+                        txt = files[path].decode("utf-8", "ignore")
+                        for old, new in remap.items():
+                            txt = txt.replace('/' + os.path.basename(old), '/' + os.path.basename(new))
+                        files[path] = txt.encode("utf-8")
+            prepared_masters[mpart] = {"files": files, "ctypes": ctypes}
             covered_parts.update(files.keys())
 
     # missing slide layouts: a harvested add/swap may use a layout the baseline
