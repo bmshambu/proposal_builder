@@ -23,6 +23,7 @@ come from decks built on the same template, so masters/layouts/theme match).
 Standard library only. Read-only on inputs; writes into the asset folder + output.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -68,9 +69,15 @@ def _slug(field, value):
 
 
 def _condition_slug(condition):
-    """Folder-safe slug for a (possibly multi-field) delta condition."""
+    """Short, deterministic, folder-safe slug for a delta condition. Kept short (a
+    readable prefix + hash) so the per-asset block paths — which nest layout and
+    master closures several levels deep — stay under the Windows MAX_PATH (260)
+    limit even for long Templafy field names."""
     parts = ["%s=%s" % (k, v) for k, v in sorted(condition.items())]
-    return re.sub(r"[^A-Za-z0-9=._-]+", "_", "__".join(parts))[:150]
+    raw = "__".join(parts)
+    short = re.sub(r"[^A-Za-z0-9=._-]+", "_", raw)[:40].strip("_")
+    h = hashlib.md5(raw.encode("utf-8")).hexdigest()[:8]
+    return ("%s_%s" % (short, h)) if short else h
 
 
 # ---------------------------------------------------------------- alignment
