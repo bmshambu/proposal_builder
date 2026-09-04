@@ -263,6 +263,26 @@ def harvest_counts():
 
 
 # ---------------------------------------------------------------- Reconstruct
+def validate_deck(path):
+    """Structural check of a rebuilt .pptx (dangling refs, content-types, etc.)."""
+    import validate_pptx as V
+    try:
+        return V.validate(path)
+    except Exception as e:
+        return [("error", os.path.basename(path), str(e))]
+
+
+def validate_all_outputs():
+    """Run the structural validator on every rebuilt deck; return a summary."""
+    rows = []
+    for o in list_outputs():
+        issues = validate_deck(o)
+        rows.append({"stem": _stem(o), "ok": len(issues) == 0, "count": len(issues),
+                     "sample": ["%s: %s" % (k, d) for k, _p, d in issues[:4]]})
+    rows.sort(key=lambda r: (r["ok"], r["stem"]))
+    return {"rows": rows, "ok_count": sum(1 for r in rows if r["ok"]), "total": len(rows)}
+
+
 def reconstruct(payload_path):
     """Rebuild a deck for a payload from the harvested library (no Templafy)."""
     import harvest
@@ -273,12 +293,16 @@ def reconstruct(payload_path):
     out_path = str(config.OUTPUT_DIR / (stem + "_rebuilt.pptx"))
     try:
         res = harvest.assemble(config.active_asset_dir(), payload, out_path, verbose=False)
+        issues = validate_deck(out_path)
         applied = "; ".join(res["deltas_applied"]) or "(baseline only)"
+        struct = "OK — opens cleanly" if not issues else ("%d STRUCTURAL ISSUE(S) — %s"
+                 % (len(issues), issues[0][2]))
         log = ("Assembled %d slides = %d baseline kept + %d harvested, %d dropped.\n"
-               "Deltas applied: %s\nToken replacements: %d"
+               "Deltas applied: %s\nToken replacements: %d\nStructure: %s"
                % (res["total_slides"], res["kept"], res["added"], res["dropped"],
-                  applied, res["tokens"]))
-        return {"ok": True, "log": log, "out": out_path, "total": res["total_slides"]}
+                  applied, res["tokens"], struct))
+        return {"ok": True, "log": log, "out": out_path, "total": res["total_slides"],
+                "valid": not issues}
     except Exception as e:
         return {"ok": False, "log": "Reconstruct failed: %s" % e}
 
@@ -296,10 +320,17 @@ def reconstruct_all(which="all"):
         if which == "test" and not config.is_test_stem(s):
             continue
         r = reconstruct(str(p))
-        (done if r["ok"] else failed).append(s)
-    log = "Rebuilt %d payloads (%s)%s." % (
-        len(done), which, (", %d failed: %s" % (len(failed), ", ".join(failed))) if failed else "")
-    return {"ok": True, "log": log, "done": done, "failed": failed}
+        if r["ok"]:
+            done.append((s, r.get("valid", True)))
+        else:
+            failed.append(s)
+    n_valid = sum(1 for _s, v in done if v)
+    bad = [s for s, v in done if not v]
+    log = "Rebuilt %d payloads (%s) — %d structurally OK%s%s." % (
+        len(done), which, n_valid,
+        (", %d WITH ISSUES: %s" % (len(bad), ", ".join(bad))) if bad else "",
+        (". %d generate-failed: %s" % (len(failed), ", ".join(failed))) if failed else "")
+    return {"ok": True, "log": log, "done": [s for s, _v in done], "failed": failed}
 
 
 # ---------------------------------------------------------------- Diff

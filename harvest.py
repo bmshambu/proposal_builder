@@ -147,7 +147,33 @@ def _harvest_slide(zf, names, part, dest_dir):
         fh.write(slide_xml)
     with open(os.path.join(dest_dir, sf + ".rels"), "w", encoding="utf-8") as fh:
         fh.write(rels_xml)
-    return {"slide_file": sf, "media": media}
+
+    # also copy the slide's LAYOUT + its media — the baseline deck may not include
+    # this layout (Templafy prunes unused layouts per deck), which would dangle.
+    layout = None
+    lm = re.search(r'Target="([^"]*slideLayout[^"]*)"', rels_xml)
+    if lm:
+        lpart = os.path.normpath(os.path.join("ppt/slides", lm.group(1))).replace("\\", "/")
+        if lpart in names:
+            lname = os.path.basename(lpart)
+            ldir = os.path.join(dest_dir, "layouts")
+            os.makedirs(os.path.join(ldir, "media"), exist_ok=True)
+            lrels_name = "ppt/slideLayouts/_rels/%s.rels" % lname
+            lrels_xml = zf.read(lrels_name).decode("utf-8", "ignore") if lrels_name in names else ""
+            lmedia = []
+            for rid, tgt in _media_targets(lrels_xml):
+                mp = os.path.normpath(os.path.join("ppt/slideLayouts", tgt)).replace("\\", "/")
+                if mp in names:
+                    mb = os.path.basename(mp)
+                    with open(os.path.join(ldir, "media", mb), "wb") as fh:
+                        fh.write(zf.read(mp))
+                    lmedia.append({"rid": rid, "file": mb})
+            with open(os.path.join(ldir, lname), "wb") as fh:
+                fh.write(zf.read(lpart))
+            with open(os.path.join(ldir, lname + ".rels"), "w", encoding="utf-8") as fh:
+                fh.write(lrels_xml)
+            layout = {"name": lname, "media": lmedia}
+    return {"slide_file": sf, "media": media, "layout": layout}
 
 
 def build_library(baseline_pptx, baseline_payload, pairs, asset_dir):
@@ -508,6 +534,53 @@ def assemble(asset_dir, payload, out_path, verbose=False):
     swap_rels_by_name = {"ppt/slides/_rels/%s.rels" % os.path.basename(p): v["rels"]
                          for p, v in swap_by_part.items()}
 
+    # missing slide layouts: a harvested add/swap may use a layout the baseline
+    # pruned -> add it (with its media) so its slide->layout rel resolves.
+    prepared_layouts = {}      # "ppt/slideLayouts/<name>" -> {"xml","rels"}
+    lay_ct = 0
+    for d in deltas:
+        if not d.get("block_slug"):
+            continue
+        bdir = os.path.join(asset_dir, "blocks", d["block_slug"])
+        sources = [(a, os.path.join(bdir, "layouts")) for a in d.get("adds", [])]
+        sources += [(sw, os.path.join(bdir, "swaps", "layouts")) for sw in d.get("swaps", [])]
+        for meta, ldir in sources:
+            lay = meta.get("layout")
+            if not lay:
+                continue
+            part = "ppt/slideLayouts/" + lay["name"]
+            if part in names or part in prepared_layouts:
+                continue        # baseline already has it, or already added
+            lpath = os.path.join(ldir, lay["name"])
+            if not os.path.exists(lpath):
+                continue
+            lxml = open(lpath, "rb").read().decode("utf-8", "ignore")
+            lrels_path = lpath + ".rels"
+            lrels = open(lrels_path, encoding="utf-8").read() if os.path.exists(lrels_path) else ""
+            for mrec in lay.get("media", []):
+                src = os.path.join(ldir, "media", mrec["file"])
+                if not os.path.exists(src):
+                    continue
+                lay_ct += 1
+                new_name = "lay%d_%s" % (lay_ct, mrec["file"])
+                new_media_parts["ppt/media/" + new_name] = open(src, "rb").read()
+                lrels = lrels.replace('Target="../media/%s"' % mrec["file"],
+                                      'Target="../media/%s"' % new_name)
+            prepared_layouts[part] = {"xml": lxml, "rels": lrels}
+
+    # orphaned notesSlides: a dropped slide's notesSlide back-references the gone
+    # slide -> drop the notesSlide (and its rels) too.
+    dropped_notes = set()
+    for it in items:
+        if it["key"] not in removes:
+            continue
+        srels = "ppt/slides/_rels/%s.rels" % os.path.basename(it["part"])
+        if srels in names:
+            for m in re.finditer(r'Target="([^"]*notesSlide[^"]*)"', _read(zf, srels)):
+                npart = os.path.normpath(os.path.join("ppt/slides", m.group(1))).replace("\\", "/")
+                dropped_notes.add(npart)
+                dropped_notes.add("ppt/notesSlides/_rels/%s.rels" % os.path.basename(npart))
+
     # build final slide order (rId assigned fresh, sldId ids renumbered)
     final = []
     for a in prepared_adds.get(frozenset(), []):        # anchored to start
@@ -559,9 +632,15 @@ def assemble(asset_dir, payload, out_path, verbose=False):
     dropped = [it["part"] for it in items if it["key"] in removes]
     for part in dropped:
         ct = re.sub(r'<Override[^>]*PartName="/%s"[^>]*/>' % re.escape(part), "", ct)
+    for part in dropped_notes:                     # drop orphaned notesSlide overrides
+        if part.endswith(".xml"):
+            ct = re.sub(r'<Override[^>]*PartName="/%s"[^>]*/>' % re.escape(part), "", ct)
     add_overrides = "".join(
         '<Override PartName="/%s" ContentType="application/vnd.openxmlformats-'
         'officedocument.presentationml.slide+xml"/>' % p for p in ct_new_slide_parts)
+    add_overrides += "".join(          # content type for any added slide layouts
+        '<Override PartName="/%s" ContentType="application/vnd.openxmlformats-'
+        'officedocument.presentationml.slideLayout+xml"/>' % p for p in prepared_layouts)
     # ensure media Defaults exist
     exts = {os.path.splitext(p)[1].lstrip(".").lower() for p in new_media_parts}
     default_ct = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
@@ -587,10 +666,12 @@ def assemble(asset_dir, payload, out_path, verbose=False):
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as out:
         for info in zf.infolist():
             name = info.filename
-            if name in dropped_set or name in dropped_rels:
+            if name in dropped_set or name in dropped_rels or name in dropped_notes:
                 continue
             if name in edited:
                 out.writestr(name, edited[name]); continue
+            if name in prepared_layouts:          # updated (media-remapped) copy below
+                continue
             if name in swap_by_part:            # kept slide replaced by condition version
                 out.writestr(name, swap_by_part[name]["xml"]); continue
             if name in swap_rels_by_name:
@@ -603,6 +684,10 @@ def assemble(asset_dir, payload, out_path, verbose=False):
         for part, o in add_by_part.items():
             out.writestr(part, o["slide_xml"])
             out.writestr("ppt/slides/_rels/%s.rels" % os.path.basename(part), o["rels_xml"])
+        # add any missing slide layouts (+ their rels) used by harvested slides
+        for part, o in prepared_layouts.items():
+            out.writestr(part, o["xml"])
+            out.writestr("ppt/slideLayouts/_rels/%s.rels" % os.path.basename(part), o["rels"])
         for part, data in new_media_parts.items():
             out.writestr(part, data)
     zf.close()

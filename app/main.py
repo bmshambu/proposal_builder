@@ -171,7 +171,17 @@ def reconstruct_get(request: Request, msg: str = ""):
         request, schema=schema, opts=constraints.effective_options(),
         payloads=[os.path.basename(p) for p in services.list_payloads()],
         outputs=[os.path.basename(o) for o in services.list_outputs()],
-        library=services.library_status(), msg=msg))
+        library=services.library_status(), validation=None, msg=msg))
+
+
+@app.post("/reconstruct/validate", response_class=HTMLResponse)
+def reconstruct_validate(request: Request):
+    return templates.TemplateResponse(request, "reconstruct.html", _ctx(
+        request, schema=schema, opts=constraints.effective_options(),
+        payloads=[os.path.basename(p) for p in services.list_payloads()],
+        outputs=[os.path.basename(o) for o in services.list_outputs()],
+        library=services.library_status(),
+        validation=services.validate_all_outputs(), msg=""))
 
 
 @app.post("/reconstruct/run-all")

@@ -22,9 +22,37 @@
     </label>
     <button class="btn primary" {% if not library %}disabled{% endif %}>Rebuild all</button>
   </form>
-  <p class="hint">Reconstructs every payload at once (runs in sequence). Use the
-    single-payload option below to test just one.</p>
+  <p class="hint">Reconstructs every payload at once (runs in sequence) and
+    structure-checks each. Use the single-payload option below to test just one.</p>
+  <hr class="sep">
+  <form method="post" action="/reconstruct/validate" class="inline">
+    <button class="btn" {% if not outputs %}disabled{% endif %}>Validate all outputs</button>
+  </form>
+  <span class="hint">Runs the structural validator on every rebuilt deck — confirms
+    they open in PowerPoint without the repair prompt.</span>
 </section>
+
+{% if validation %}
+<section class="card">
+  <h2>Structural validation
+    <span class="muted">— {{ validation.ok_count }}/{{ validation.total }} clean</span></h2>
+  <div class="verdict {{ 'v-ok' if validation.ok_count==validation.total else 'v-bad' }}">
+    {{ validation.ok_count }}/{{ validation.total }} open cleanly
+  </div>
+  <table class="difftable">
+    <thead><tr><th>rebuilt deck</th><th>status</th><th>issues</th></tr></thead>
+    <tbody>
+      {% for r in validation.rows %}
+      <tr>
+        <td>{{ r.stem }}</td>
+        <td class="{{ 'ok' if r.ok else 'bad' }}"><b>{{ 'OK' if r.ok else (r.count ~ ' issue(s)') }}</b></td>
+        <td class="words">{% for s in r.sample %}{{ s }}<br>{% endfor %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
 
 <div class="two-col">
   <section class="card">
