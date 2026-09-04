@@ -106,6 +106,14 @@
   .flow .ahead{fill:var(--muted)} .flow .ahead-acc{fill:var(--accent)}
   .flow .okbox{fill:var(--ok-soft); stroke:var(--ok); stroke-width:1.5}
   .flow .oktext{fill:var(--ok); font-weight:600; font-family:"IBM Plex Sans",sans-serif; font-size:13px}
+  .flow .slide{fill:var(--surface); stroke:var(--line-strong); stroke-width:1.25}
+  .flow .slide.add{fill:var(--accent-soft); stroke:var(--accent); stroke-width:1.75}
+  .flow .slide.reword{fill:var(--warn-soft); stroke:var(--warn); stroke-width:1.75}
+  .flow .slide.ghost{fill:none; stroke:var(--line-strong); stroke-width:1.25; stroke-dasharray:3 4}
+  .flow .stext{font-family:"IBM Plex Sans",sans-serif; font-size:12px; fill:var(--ink)}
+  .flow .stext.dim{fill:var(--faint)}
+  .flow .same{stroke:var(--line-strong); stroke-width:1.1}
+  .flow .eq{font-family:"IBM Plex Mono",monospace; font-size:12px; fill:var(--faint)}
 
   .resgrid{display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:8px}
   @media(max-width:720px){ .resgrid{grid-template-columns:1fr} }
@@ -306,9 +314,103 @@
     </div>
   </section>
 
-  <section>
+  <section style="border-bottom:0; padding-bottom:20px">
     <div class="col">
       <div class="snum">04</div>
+      <h2>How &ldquo;harvesting&rdquo; works</h2>
+      <p>Harvesting is the one-time step where the engine <strong>learns Templafy&rsquo;s rules from its own decks</strong>. The idea is deliberately simple&mdash;it is <strong>spot-the-difference between two PowerPoints</strong>. No AI, no reverse-engineering of Templafy itself; just careful comparison.</p>
+      <p>Here is the whole method in one worked example.</p>
+    </div>
+  </section>
+
+  <div class="band">
+    <div class="wrap">
+      <figure class="flow">
+        <div class="figscroll">
+        <svg viewBox="0 0 980 400" role="img" aria-label="Spot-the-difference harvest. A baseline deck (all answers at default) is laid slide-for-slide next to the same deck with one answer switched on (Expansion of Services). Most slides match exactly. Two do not: one brand-new slide appears (Expansion detail) and one slide is reworded (Scope). The engine clips out just those two changed slides and files them in the library under the label 'Expansion of Services = Yes'.">
+          <defs>
+            <marker id="ah2" viewBox="0 0 9 9" refX="7.5" refY="4.5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path class="ahead-acc" d="M0,0 L9,4.5 L0,9 z"/>
+            </marker>
+          </defs>
+
+          <text class="lbl" x="165" y="48" text-anchor="middle">Baseline deck</text>
+          <text class="sub" x="165" y="66" text-anchor="middle">every answer at its default</text>
+          <text class="lbl" x="545" y="48" text-anchor="middle">Same deck, one answer flipped</text>
+          <text class="sub" x="545" y="66" text-anchor="middle">user ticks &ldquo;Expansion of Services&rdquo;</text>
+
+          <!-- matched rows: identical slides, connected by a faint = -->
+          <g>
+            <rect class="slide" x="90" y="92" width="150" height="26" rx="6"/><text class="stext" x="105" y="109">1 &middot; Cover</text>
+            <rect class="slide" x="470" y="92" width="150" height="26" rx="6"/><text class="stext" x="485" y="109">1 &middot; Cover</text>
+            <line class="same" x1="240" y1="105" x2="470" y2="105"/><text class="eq" x="355" y="101" text-anchor="middle">=</text>
+
+            <rect class="slide" x="90" y="126" width="150" height="26" rx="6"/><text class="stext" x="105" y="143">2 &middot; About us</text>
+            <rect class="slide" x="470" y="126" width="150" height="26" rx="6"/><text class="stext" x="485" y="143">2 &middot; About us</text>
+            <line class="same" x1="240" y1="139" x2="470" y2="139"/><text class="eq" x="355" y="135" text-anchor="middle">=</text>
+
+            <rect class="slide" x="90" y="160" width="150" height="26" rx="6"/><text class="stext" x="105" y="177">3 &middot; Our team</text>
+            <rect class="slide" x="470" y="160" width="150" height="26" rx="6"/><text class="stext" x="485" y="177">3 &middot; Our team</text>
+            <line class="same" x1="240" y1="173" x2="470" y2="173"/><text class="eq" x="355" y="169" text-anchor="middle">=</text>
+
+            <rect class="slide" x="90" y="194" width="150" height="26" rx="6"/><text class="stext" x="105" y="211">4 &middot; Approach</text>
+            <rect class="slide" x="470" y="194" width="150" height="26" rx="6"/><text class="stext" x="485" y="211">4 &middot; Approach</text>
+            <line class="same" x1="240" y1="207" x2="470" y2="207"/><text class="eq" x="355" y="203" text-anchor="middle">=</text>
+          </g>
+
+          <!-- ADDED row: nothing on the left, new slide on the right -->
+          <rect class="slide ghost" x="90" y="228" width="150" height="26" rx="6"/><text class="stext dim" x="118" y="245">(not present)</text>
+          <rect class="slide add" x="470" y="228" width="150" height="26" rx="6"/><text class="stext" x="485" y="245">+ Expansion detail</text>
+          <line class="edge acc" x1="300" y1="241" x2="470" y2="241" stroke-dasharray="4 4" marker-end="url(#ah2)"/>
+          <text class="elabel" x="360" y="236" text-anchor="middle">this answer ADDS a slide</text>
+
+          <rect class="slide" x="90" y="262" width="150" height="26" rx="6"/><text class="stext" x="105" y="279">5 &middot; Fees</text>
+          <rect class="slide" x="470" y="262" width="150" height="26" rx="6"/><text class="stext" x="485" y="279">5 &middot; Fees</text>
+          <line class="same" x1="240" y1="275" x2="470" y2="275"/><text class="eq" x="355" y="271" text-anchor="middle">=</text>
+
+          <!-- REWORDED row: same slide, different words -->
+          <rect class="slide" x="90" y="296" width="150" height="26" rx="6"/><text class="stext" x="105" y="313">6 &middot; Scope</text>
+          <rect class="slide reword" x="470" y="296" width="150" height="26" rx="6"/><text class="stext" x="485" y="313">6 &middot; Scope*</text>
+          <line class="edge acc" x1="240" y1="309" x2="470" y2="309" stroke-dasharray="4 4"/><text class="elabel" x="355" y="305" text-anchor="middle">REWORDED</text>
+
+          <rect class="slide" x="90" y="330" width="150" height="26" rx="6"/><text class="stext" x="105" y="347">7 &middot; Contacts</text>
+          <rect class="slide" x="470" y="330" width="150" height="26" rx="6"/><text class="stext" x="485" y="347">7 &middot; Contacts</text>
+          <line class="same" x1="240" y1="343" x2="470" y2="343"/><text class="eq" x="355" y="339" text-anchor="middle">=</text>
+
+          <!-- the two differences are clipped into the library -->
+          <rect class="box acc" x="720" y="196" width="222" height="132" rx="12"/>
+          <text class="lbl" x="736" y="224">Slide-block library</text>
+          <text class="tag" x="736" y="248">FILED UNDER THE ANSWER</text>
+          <text class="sub" x="736" y="272">Expansion of Services = Yes</text>
+          <text class="sub" x="736" y="294">&nbsp;&nbsp;+&nbsp; 1 new slide (Expansion detail)</text>
+          <text class="sub" x="736" y="312">&nbsp;&nbsp;&asymp;&nbsp; 1 reworded slide (Scope)</text>
+          <path class="edge acc" d="M620,241 C 675,241 675,255 720,255" marker-end="url(#ah2)"/>
+          <path class="edge acc" d="M620,309 C 675,309 675,275 720,275" marker-end="url(#ah2)"/>
+        </svg>
+        </div>
+        <figcaption>One answer, one comparison. The engine lines the two decks up slide-for-slide: six slides are <strong>identical</strong> (=), one is <strong>brand-new</strong>, one is <strong>reworded</strong>. It clips out only those two and files them under &ldquo;Expansion of Services = Yes.&rdquo; Repeat once per answer and the library holds a labelled clip for every option.</figcaption>
+      </figure>
+    </div>
+  </div>
+
+  <section>
+    <div class="col">
+      <h3 style="font-size:1.15rem; margin-bottom:6px">Walking through the example</h3>
+      <ol class="steps">
+        <li><b>Start with a baseline deck.</b> Ask Templafy for the deck it builds when every answer is left at its default. This is our reference point.</li>
+        <li><b>Change exactly one answer.</b> Ask Templafy for a second deck that is identical except the user ticked <span class="field">Expansion of Services</span>. Everything else is held the same.</li>
+        <li><b>Lay them side by side and compare, slide by slide.</b> Almost every slide matches. The only differences are what that one answer did: a new <em>&ldquo;Expansion detail&rdquo;</em> slide appeared, and the <em>Scope</em> slide&rsquo;s wording changed.</li>
+        <li><b>Clip out just the differences.</b> The engine saves those two slides into the library, labelled &ldquo;Expansion of Services = Yes.&rdquo; It ignores the six slides that didn&rsquo;t change&mdash;those already live in the baseline.</li>
+        <li><b>Repeat once per answer.</b> Do the same for each toggle, sector and city. Now the library holds a small, labelled clip for every option a user could pick.</li>
+      </ol>
+      <p style="margin-top:20px"><b>Rebuilding is the reverse.</b> For a brand-new request, the engine starts from the baseline and, for every answer switched on, drops that answer&rsquo;s saved clip back into place. Finally it types the new <span class="field">client name</span>, <span class="field">city</span> and <span class="field">date</span> over the baseline&rsquo;s&mdash;and the deck is done, with no Templafy involved.</p>
+      <p class="muted" style="margin-top:14px"><b>One clever detail that makes it reliable:</b> Templafy stamps every slide with a hidden ID that never changes from deck to deck. The engine matches slides by that ID, so it can tell &ldquo;this is the same slide&rdquo; even after the client name, city and date on it are completely different&mdash;which is why the comparison stays exact across decks for different clients.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="col">
+      <div class="snum">05</div>
       <h2>How well it works</h2>
       <p>We tested on payloads the engine <strong>had never seen</strong>&mdash;new combinations of options and brand-new client names&mdash;and compared each rebuild to Templafy&rsquo;s real output.</p>
     </div>
@@ -348,7 +450,7 @@
 
   <section>
     <div class="col">
-      <div class="snum">05</div>
+      <div class="snum">06</div>
       <h2>What&rsquo;s left, and the path to 100%</h2>
       <p>The only thing the engine can&rsquo;t reproduce is the <strong>~3&ndash;5 data-driven slides</strong> per deck: the fee assumptions, the named lead partner, the RFP cross-reference table. Templafy fills these from connected data sources (profile, finance, RFP systems)&mdash;so the numbers and names change per engagement, and we simply don&rsquo;t hold that data yet.</p>
     </div>
@@ -378,7 +480,7 @@
 
   <section>
     <div class="col">
-      <div class="snum">06</div>
+      <div class="snum">07</div>
       <h2>What &ldquo;done&rdquo; looks like &mdash; and what changes if we get the asset</h2>
       <p>Today the engine learns the rules the hard way: generate many decks and compare them. If we obtain Templafy&rsquo;s actual <strong>library asset</strong> &mdash; the branded slide-blocks <em>and</em> the rules that bind each answer to a block and each field to a data source &mdash; the approach flips from <strong>black-box</strong> (infer the rules by observation) to <strong>white-box</strong> (import the blocks and rules directly). Cheaper to build, and <strong>complete instead of sampled</strong>.</p>
     </div>
@@ -404,7 +506,7 @@
 
   <section>
     <div class="col">
-      <div class="snum">07</div>
+      <div class="snum">08</div>
       <h2>Extending to other templates</h2>
       <p>This POC covers <strong>one template</strong> (the public-audit proposal). The engine itself is <strong>template-agnostic</strong>&mdash;it learns from whatever decks you give it. Onboarding another template (a different service line, a new region, a refreshed brand) is a <strong>data task, not an engineering task</strong>:</p>
       <ol class="steps">
