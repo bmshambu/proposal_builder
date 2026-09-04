@@ -32,6 +32,9 @@ import zipfile
 
 import pptx_forensics as pf
 
+# payload field whose value (a city name) appears as literal text in slides
+_CITY_KEY = "If_the_local_office_presence_important_select_the_appropriate_city"
+
 
 # ---------------------------------------------------------------- payloads
 def flatten(obj, prefix=""):
@@ -300,9 +303,9 @@ def build_library(baseline_pptx, baseline_payload, pairs, asset_dir):
     base = pf.load_deck(baseline_pptx)
     base_flat = flatten(baseline_payload)
 
-    # baseline literal token values to substitute later
+    # baseline literal token values to substitute later (client, date, city)
     token_baseline = {}
-    for key in ("FullClientName", "ShortClientName", "DueDate"):
+    for key in ("FullClientName", "ShortClientName", "DueDate", _CITY_KEY):
         if key in base_flat:
             token_baseline[key] = base_flat[key]
 
@@ -451,7 +454,7 @@ def _token_replacements(manifest, payload_flat, baseline_text=""):
     baseline deck text."""
     reps = []
     tb = manifest.get("token_baseline", {})
-    for key in ("FullClientName", "ShortClientName"):
+    for key in ("FullClientName", "ShortClientName", _CITY_KEY):
         base_val, new_val = tb.get(key), payload_flat.get(key)
         if base_val and new_val is not None and str(new_val) != str(base_val):
             reps.append((str(base_val), str(new_val)))
@@ -537,13 +540,16 @@ def _apply_tokens(xml, reps):
     if not reps:
         return xml
     reps = sorted(reps, key=lambda r: -len(r[0]))   # longest match first
+    # match only WHOLE tokens (not substrings) so "Example" doesn't turn the word
+    # "Examples" into "Globexs". (?<!\w)...(?!\w) = not part of a bigger word.
+    compiled = [(re.compile(r'(?<!\w)' + re.escape(find) + r'(?!\w)'), rep)
+                for find, rep in reps]
 
     def repl(m):
         raw = _xml_unescape(m.group(2))
         new = raw
-        for find, rep in reps:
-            if find in new:
-                new = new.replace(find, rep)
+        for pat, rep in compiled:
+            new = pat.sub(lambda _m: rep, new)
         if new == raw:
             return m.group(0)
         return m.group(1) + _xml_escape(new) + m.group(3)
