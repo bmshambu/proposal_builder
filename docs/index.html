@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Proposal Builder</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* KPMG palette: Blue #00338D, Light Blue #0091DA, with green/gold accents */
+  :root{
+    --paper:#f2f5f9; --surface:#ffffff; --surface-2:#f4f8fc;
+    --ink:#0b1b3a; --muted:#55607a; --faint:#8a94a8;
+    --line:#dbe2ec; --line-strong:#c3cddb;
+    --accent:#0091DA; --accent-ink:#00338D; --accent-soft:#e1eefb;
+    --ok:#2f8a3f; --ok-soft:#e6f4e8;
+    --warn:#a86e00; --warn-soft:#f7efdb;
+    --shadow:0 1px 2px rgba(0,51,141,.07), 0 8px 24px rgba(0,51,141,.06);
+    color-scheme:light dark;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --paper:#081226; --surface:#0e1a33; --surface-2:#0b1528;
+      --ink:#e8eefb; --muted:#93a1bd; --faint:#6b7994;
+      --line:#1e2c48; --line-strong:#2b3c5c;
+      --accent:#33a9e6; --accent-ink:#7cc4f2; --accent-soft:#0e2740;
+      --ok:#4fc07a; --ok-soft:#0f2a19;
+      --warn:#e2b24e; --warn-soft:#2c2412;
+      --shadow:0 1px 2px rgba(0,0,0,.35), 0 10px 30px rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#081226; --surface:#0e1a33; --surface-2:#0b1528;
+    --ink:#e8eefb; --muted:#93a1bd; --faint:#6b7994;
+    --line:#1e2c48; --line-strong:#2b3c5c;
+    --accent:#33a9e6; --accent-ink:#7cc4f2; --accent-soft:#0e2740;
+    --ok:#4fc07a; --ok-soft:#0f2a19;
+    --warn:#e2b24e; --warn-soft:#2c2412;
+    --shadow:0 1px 2px rgba(0,0,0,.35), 0 10px 30px rgba(0,0,0,.4);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:"IBM Plex Sans",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    font-size:17px; line-height:1.65; -webkit-font-smoothing:antialiased;
+    border-top:4px solid var(--accent-ink);
+  }
+  img{max-width:100%}
+  .wrap{max-width:1080px; margin:0 auto; padding:0 24px}
+  .col{max-width:720px}
+  a{color:var(--accent-ink)}
+  h1,h2,h3{font-family:"Fraunces",Georgia,serif; font-weight:600; line-height:1.12; text-wrap:balance; margin:0}
+  .mono{font-family:"IBM Plex Mono",ui-monospace,monospace}
+  code, .field{font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:.82em;
+    background:var(--surface-2); border:1px solid var(--line); border-radius:5px; padding:.08em .38em}
+  .eyebrow{font-family:"IBM Plex Mono",monospace; font-size:.72rem; letter-spacing:.16em;
+    text-transform:uppercase; color:var(--accent-ink)}
+
+  .hero{padding:72px 0 40px; border-bottom:1px solid var(--line)}
+  .hero h1{font-size:clamp(2.5rem,6.2vw,4.4rem); letter-spacing:-.01em; margin:.5rem 0 .2rem}
+  .hero h1 em{font-style:italic; color:var(--accent-ink)}
+  .lede{font-size:clamp(1.1rem,2.2vw,1.35rem); color:var(--muted); max-width:34ch; margin:.6rem 0 0}
+  .glance{display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-top:36px}
+  .stat{background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:18px 18px 16px; box-shadow:var(--shadow)}
+  .stat .n{font-family:"Fraunces",serif; font-size:2.05rem; font-weight:600; line-height:1; letter-spacing:-.01em}
+  .stat .n.ok{color:var(--ok)} .stat .n.acc{color:var(--accent-ink)}
+  .stat .k{font-size:.82rem; color:var(--muted); margin-top:8px}
+  @media(max-width:720px){ .glance{grid-template-columns:repeat(2,1fr)} }
+
+  section{padding:56px 0; border-bottom:1px solid var(--line)}
+  .snum{font-family:"IBM Plex Mono",monospace; font-size:.85rem; color:var(--faint); letter-spacing:.05em}
+  section h2{font-size:clamp(1.7rem,3.4vw,2.3rem); letter-spacing:-.01em; margin:.35rem 0 .9rem}
+  section p{margin:0 0 1rem}
+  .muted{color:var(--muted)}
+  strong{font-weight:600}
+
+  .strip{display:flex; align-items:stretch; gap:0; flex-wrap:wrap; margin:26px 0 8px}
+  .strip .cell{flex:1 1 190px; background:var(--surface); border:1px solid var(--line); border-radius:12px;
+    padding:16px 18px; box-shadow:var(--shadow)}
+  .strip .arrow{display:flex; align-items:center; color:var(--faint); padding:0 4px; font-size:1.4rem}
+  .strip .cell .t{font-weight:600} .strip .cell .d{font-size:.86rem; color:var(--muted); margin-top:4px}
+
+  .rows{list-style:none; padding:0; margin:18px 0 0; display:grid; gap:2px}
+  .rows li{display:grid; grid-template-columns:22px 1fr; gap:12px; padding:11px 0; border-top:1px solid var(--line)}
+  .rows li:first-child{border-top:0}
+  .rows .mk{font-family:"IBM Plex Mono",monospace; color:var(--accent-ink); font-size:.9rem; padding-top:2px}
+  .rows b{font-weight:600}
+
+  .band{background:var(--surface-2); border-top:1px solid var(--line); border-bottom:1px solid var(--line)}
+  figure{margin:0; padding:44px 0}
+  .figscroll{overflow-x:auto}
+  figure svg{display:block; width:100%; height:auto; min-width:680px}
+  figcaption{color:var(--muted); font-size:.92rem; max-width:70ch; margin:18px auto 0; text-align:center}
+
+  .flow{color:var(--ink)}
+  .flow .box{fill:var(--surface); stroke:var(--line-strong); stroke-width:1.5}
+  .flow .box.acc{stroke:var(--accent); stroke-width:1.75}
+  .flow .lane{fill:none; stroke:var(--line); stroke-width:1; stroke-dasharray:2 5}
+  .flow .lbl{font-family:"IBM Plex Sans",sans-serif; font-weight:600; font-size:14px; fill:var(--ink)}
+  .flow .sub{font-family:"IBM Plex Sans",sans-serif; font-size:11.5px; fill:var(--muted)}
+  .flow .tag{font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.08em; fill:var(--faint)}
+  .flow .num{font-family:"IBM Plex Mono",monospace; font-size:12px; fill:var(--accent-ink); font-weight:500}
+  .flow .edge{stroke:var(--muted); stroke-width:1.6; fill:none}
+  .flow .edge.acc{stroke:var(--accent); stroke-width:2}
+  .flow .elabel{font-family:"IBM Plex Mono",monospace; font-size:11px; fill:var(--accent-ink)}
+  .flow .ahead{fill:var(--muted)} .flow .ahead-acc{fill:var(--accent)}
+  .flow .okbox{fill:var(--ok-soft); stroke:var(--ok); stroke-width:1.5}
+  .flow .oktext{fill:var(--ok); font-weight:600; font-family:"IBM Plex Sans",sans-serif; font-size:13px}
+
+  .resgrid{display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:8px}
+  @media(max-width:720px){ .resgrid{grid-template-columns:1fr} }
+  .panel{background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:22px; box-shadow:var(--shadow)}
+  .panel h3{font-size:1.15rem; margin-bottom:2px}
+  .panel .sub{font-size:.85rem; color:var(--muted); margin-bottom:14px}
+  .big{font-family:"Fraunces",serif; font-size:2.6rem; font-weight:600; line-height:1; letter-spacing:-.01em}
+  .big.ok{color:var(--ok)}
+  .kv{display:flex; justify-content:space-between; gap:12px; padding:8px 0; border-top:1px solid var(--line); font-size:.94rem}
+  .kv:first-of-type{border-top:0}
+  .kv .v{font-variant-numeric:tabular-nums; font-weight:600}
+  .pill{display:inline-block; font-family:"IBM Plex Mono",monospace; font-size:.72rem; letter-spacing:.04em;
+    padding:2px 9px; border-radius:999px; border:1px solid var(--line)}
+  .pill.ok{background:var(--ok-soft); color:var(--ok); border-color:transparent}
+  .pill.warn{background:var(--warn-soft); color:var(--warn); border-color:transparent}
+
+  .cover{margin:22px 0 6px}
+  .barwrap{display:flex; height:46px; border-radius:12px; overflow:hidden; border:1px solid var(--line); box-shadow:var(--shadow)}
+  .seg{display:flex; align-items:center; padding:0 16px; font-size:.9rem; font-weight:600; color:#fff}
+  .seg.auto{background:var(--accent); flex:0 0 92%}
+  .seg.data{background:var(--warn); flex:1; color:#fff; justify-content:center; padding:0 6px; font-size:.8rem}
+  .coverkey{display:flex; gap:22px; margin-top:12px; font-size:.86rem; color:var(--muted); flex-wrap:wrap}
+  .coverkey span{display:flex; align-items:center; gap:8px}
+  .dot{width:11px; height:11px; border-radius:3px; display:inline-block}
+  .dot.auto{background:var(--accent)} .dot.data{background:var(--warn)}
+
+  .cards{display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:8px}
+  @media(max-width:720px){ .cards{grid-template-columns:1fr} }
+  .card{background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:20px; box-shadow:var(--shadow)}
+  .card .h{font-weight:600; margin-bottom:6px; display:flex; align-items:center; gap:9px}
+  .card p{font-size:.94rem; color:var(--muted); margin:0}
+
+  .steps{counter-reset:s; list-style:none; padding:0; margin:20px 0 0; display:grid; gap:12px}
+  .steps li{position:relative; padding-left:44px; min-height:30px}
+  .steps li::before{counter-increment:s; content:counter(s); position:absolute; left:0; top:-2px;
+    width:30px; height:30px; border-radius:8px; background:var(--accent-soft); color:var(--accent-ink);
+    font-family:"IBM Plex Mono",monospace; font-weight:500; display:grid; place-items:center; font-size:.9rem}
+
+  footer{padding:40px 0 64px; color:var(--faint); font-size:.85rem}
+  .foot-line{display:flex; gap:14px; flex-wrap:wrap; align-items:center}
+  hr.soft{border:0; border-top:1px solid var(--line); margin:26px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hero">
+    <div class="eyebrow">Proof of concept &middot; Proposal deck automation</div>
+    <h1>Building branded decks <em>without</em> Templafy.</h1>
+    <p class="lede">A deterministic engine that rebuilds our 50&ndash;60 slide proposal drafts&mdash;at zero license cost.</p>
+
+    <div class="glance">
+      <div class="stat"><div class="n ok">100%</div><div class="k">of training decks rebuilt exactly (63/63)</div></div>
+      <div class="stat"><div class="n ok">100%</div><div class="k">correct slide selection on unseen combinations</div></div>
+      <div class="stat"><div class="n acc">~92%</div><div class="k">of every deck fully automated, no manual work</div></div>
+      <div class="stat"><div class="n acc">&euro;0</div><div class="k">licensing to run it, once built</div></div>
+    </div>
+  </header>
+
+  <section>
+    <div class="col">
+      <div class="snum">01</div>
+      <h2>The problem</h2>
+      <p>Every client proposal&mdash;Audit, Advisory, Tax&mdash;is a <strong>50&ndash;60 slide branded PowerPoint draft</strong>. Today we assemble those drafts with <strong>Templafy</strong>, a third-party tool, from a bank of branded templates and slides.</p>
+      <p>Templafy works, but its <strong>license is expensive</strong>. And when we looked closely, we realised that <strong>most of what it does is pure automation</strong>: pick the right slides for the request, drop in the client name, date and city, and apply the brand. If that part is mechanical, we can do it ourselves and stop paying for it.</p>
+      <p class="muted">The question this POC answers: <em>how much of Templafy can we replace deterministically&mdash;and how faithfully?</em></p>
+    </div>
+  </section>
+
+  <section>
+    <div class="col">
+      <div class="snum">02</div>
+      <h2>What Templafy does today</h2>
+      <p>A user answers a short form&mdash;service line, client, due date, industry sector, office city, and a set of yes/no options. Templafy then assembles the deck:</p>
+    </div>
+    <div class="strip">
+      <div class="cell"><div class="t">1 &middot; Answer the form</div><div class="d">service line, client, date, sector, city, optional sections</div></div>
+      <div class="arrow">&rarr;</div>
+      <div class="cell"><div class="t">2 &middot; Assemble</div><div class="d">keep / drop slides from a master, fill text &amp; images, apply branding</div></div>
+      <div class="arrow">&rarr;</div>
+      <div class="cell"><div class="t">3 &middot; Branded draft</div><div class="d">a ready-to-edit proposal deck</div></div>
+    </div>
+    <div class="col">
+      <p class="muted" style="margin-top:18px">Two kinds of content go into that deck: <strong>deterministic</strong> pieces (which slides, the client name, the city&mdash;decided purely by the answers) and a few <strong>data-driven</strong> pieces (fee tables, partner names, RFP responses) that Templafy pulls from connected data sources. That split turns out to be the whole story.</p>
+    </div>
+  </section>
+
+  <section style="border-bottom:0; padding-bottom:20px">
+    <div class="col">
+      <div class="snum">03</div>
+      <h2>What we built</h2>
+      <p>A small app with a simple idea: <strong>learn the rules once from Templafy&rsquo;s own output, then rebuild any deck ourselves.</strong> It runs in four stages.</p>
+    </div>
+  </section>
+
+  <div class="band">
+    <div class="wrap">
+      <figure class="flow">
+        <div class="figscroll">
+        <svg viewBox="0 0 980 470" role="img" aria-label="Learn-once, run-anytime pipeline. Top lane uses Templafy: inputs feed Construct, which generates reference decks; Harvest compares each deck to a baseline and builds a slide-block library. Bottom lane needs no Templafy: a new request feeds Reconstruct, which combines the baseline with the learned blocks and fills in client, city and date to produce a branded deck; Diff compares that rebuild to Templafy's original and confirms a match. The block library feeds Reconstruct.">
+          <defs>
+            <marker id="ah" viewBox="0 0 9 9" refX="7.5" refY="4.5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path class="ahead" d="M0,0 L9,4.5 L0,9 z"/>
+            </marker>
+            <marker id="aha" viewBox="0 0 9 9" refX="7.5" refY="4.5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path class="ahead-acc" d="M0,0 L9,4.5 L0,9 z"/>
+            </marker>
+          </defs>
+
+          <text class="tag" x="24" y="38">LEARN ONCE &middot; USES TEMPLAFY</text>
+          <text class="tag" x="24" y="292">RUN ANYTIME &middot; NO TEMPLAFY &middot; NO LICENSE</text>
+          <rect class="lane" x="16" y="50" width="948" height="132" rx="14"/>
+          <rect class="lane" x="16" y="304" width="948" height="132" rx="14"/>
+
+          <rect class="box" x="28" y="78" width="150" height="78" rx="11"/>
+          <text class="lbl" x="103" y="108" text-anchor="middle">Inputs</text>
+          <text class="sub" x="103" y="126" text-anchor="middle">service line, client,</text>
+          <text class="sub" x="103" y="140" text-anchor="middle">date, sector, city&hellip;</text>
+          <line class="edge" x1="180" y1="117" x2="222" y2="117" marker-end="url(#ah)"/>
+
+          <rect class="box" x="226" y="78" width="216" height="78" rx="11"/>
+          <text class="num" x="240" y="100">1</text>
+          <text class="lbl" x="264" y="100">Construct</text>
+          <text class="sub" x="240" y="122">Templafy generates reference</text>
+          <text class="sub" x="240" y="138">decks for many input combos</text>
+          <line class="edge" x1="444" y1="117" x2="486" y2="117" marker-end="url(#ah)"/>
+
+          <rect class="box acc" x="490" y="78" width="230" height="78" rx="11"/>
+          <text class="num" x="504" y="100">2</text>
+          <text class="lbl" x="528" y="100">Harvest</text>
+          <text class="sub" x="504" y="122">compare each deck to a baseline;</text>
+          <text class="sub" x="504" y="138">learn what each option changes</text>
+          <line class="edge acc" x1="722" y1="117" x2="762" y2="117" marker-end="url(#aha)"/>
+
+          <rect class="box acc" x="766" y="78" width="186" height="78" rx="11"/>
+          <text class="lbl" x="859" y="110" text-anchor="middle">Slide-block</text>
+          <text class="lbl" x="859" y="128" text-anchor="middle">library + rules</text>
+
+          <path class="edge acc" d="M859,156 L859,232 L334,232 L334,300" marker-end="url(#aha)"/>
+          <text class="elabel" x="600" y="224" text-anchor="middle">learned blocks feed every rebuild</text>
+
+          <rect class="box" x="28" y="332" width="150" height="78" rx="11"/>
+          <text class="lbl" x="103" y="362" text-anchor="middle">New request</text>
+          <text class="sub" x="103" y="380" text-anchor="middle">a fresh set of</text>
+          <text class="sub" x="103" y="394" text-anchor="middle">answers</text>
+          <line class="edge" x1="180" y1="371" x2="222" y2="371" marker-end="url(#ah)"/>
+
+          <rect class="box acc" x="226" y="332" width="216" height="78" rx="11"/>
+          <text class="num" x="240" y="354">3</text>
+          <text class="lbl" x="264" y="354">Reconstruct</text>
+          <text class="sub" x="240" y="376">baseline + learned blocks,</text>
+          <text class="sub" x="240" y="392">fill in client / city / date</text>
+          <line class="edge" x1="444" y1="371" x2="486" y2="371" marker-end="url(#ah)"/>
+
+          <rect class="box" x="490" y="332" width="150" height="78" rx="11"/>
+          <text class="lbl" x="565" y="362" text-anchor="middle">Branded deck</text>
+          <text class="sub" x="565" y="380" text-anchor="middle">rebuilt, no</text>
+          <text class="sub" x="565" y="394" text-anchor="middle">Templafy</text>
+          <line class="edge" x1="642" y1="371" x2="684" y2="371" marker-end="url(#ah)"/>
+
+          <rect class="box" x="688" y="332" width="150" height="78" rx="11"/>
+          <text class="num" x="702" y="354">4</text>
+          <text class="lbl" x="726" y="354">Diff</text>
+          <text class="sub" x="702" y="376">rebuild vs the real</text>
+          <text class="sub" x="702" y="392">Templafy deck</text>
+          <line class="edge" x1="838" y1="371" x2="880" y2="371" marker-end="url(#ah)"/>
+
+          <rect class="okbox" x="884" y="344" width="72" height="54" rx="10"/>
+          <text class="oktext" x="920" y="376" text-anchor="middle">MATCH</text>
+        </svg>
+        </div>
+        <figcaption>The engine <strong>learns once</strong> from Templafy&rsquo;s own decks (top), then <strong>rebuilds forever</strong> without it (bottom). Harvest works out which slides each answer adds, removes or rewords; Reconstruct replays those changes on a baseline deck and fills in the client, city and date; Diff proves the rebuild matches Templafy&rsquo;s original.</figcaption>
+      </figure>
+    </div>
+  </div>
+
+  <section>
+    <div class="col">
+      <h3 style="font-size:1.15rem; margin-bottom:6px">The core idea, in one line</h3>
+      <p>It is <strong>not AI and not guesswork</strong>&mdash;it is deterministic assembly. Templafy&rsquo;s output is consistent, so we can measure exactly what changes for every option and replay it.</p>
+      <ul class="rows">
+        <li><span class="mk">&#9633;</span><span><b>Baseline.</b> One standard deck is the starting point for every rebuild.</span></li>
+        <li><span class="mk">+</span><span><b>Blocks.</b> Each answer (a toggle, a sector, a city) adds, removes or swaps a precise set of slides&mdash;learned by comparing decks.</span></li>
+        <li><span class="mk">&asymp;</span><span><b>Tokens.</b> The client name and date are filled in as text, everywhere they appear.</span></li>
+        <li><span class="mk">&#10003;</span><span><b>Proof.</b> Every rebuild is compared to Templafy&rsquo;s real deck, slide by slide, to confirm it&rsquo;s identical.</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <div class="col">
+      <div class="snum">04</div>
+      <h2>How well it works</h2>
+      <p>We tested on payloads the engine <strong>had never seen</strong>&mdash;new combinations of options and brand-new client names&mdash;and compared each rebuild to Templafy&rsquo;s real output.</p>
+    </div>
+
+    <div class="resgrid">
+      <div class="panel">
+        <h3>Training set</h3>
+        <div class="sub">the decks the engine learned from</div>
+        <div class="big ok">100%</div>
+        <div class="muted" style="font-size:.9rem; margin:6px 0 14px">exact match &middot; 63 of 63 decks</div>
+        <div class="kv"><span>Right slides, right order</span><span class="v">100%</span></div>
+        <div class="kv"><span>Text &amp; branding correct</span><span class="v">100%</span></div>
+      </div>
+      <div class="panel">
+        <h3>Held-out test set</h3>
+        <div class="sub">unseen combinations + new clients</div>
+        <div class="big ok">100%</div>
+        <div class="muted" style="font-size:.9rem; margin:6px 0 14px">correct slide selection &middot; 6 of 6</div>
+        <div class="kv"><span>Full match</span><span class="v">3 / 6 <span class="pill ok">MATCH</span></span></div>
+        <div class="kv"><span>Differ only on data slides</span><span class="v">3 / 6 <span class="pill warn">~3 slides</span></span></div>
+      </div>
+    </div>
+
+    <div class="col cover">
+      <h3 style="font-size:1.15rem; margin:26px 0 4px">Where a deck stands, slide by slide</h3>
+      <p class="muted" style="margin-bottom:6px">Roughly <strong>92%</strong> of every deck is reproduced perfectly by the engine. The rest is a handful of <strong>data-driven</strong> slides.</p>
+      <div class="barwrap">
+        <div class="seg auto">~92% &nbsp;automated &amp; exact</div>
+        <div class="seg data">~8%</div>
+      </div>
+      <div class="coverkey">
+        <span><i class="dot auto"></i> Deterministic: slides, client, city, date, branding &mdash; rebuilt exactly</span>
+        <span><i class="dot data"></i> Data-driven: fees, partner names, RFP tables &mdash; from external data</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="col">
+      <div class="snum">05</div>
+      <h2>What&rsquo;s left, and the path to 100%</h2>
+      <p>The only thing the engine can&rsquo;t reproduce is the <strong>~3&ndash;5 data-driven slides</strong> per deck: the fee assumptions, the named lead partner, the RFP cross-reference table. Templafy fills these from connected data sources (profile, finance, RFP systems)&mdash;so the numbers and names change per engagement, and we simply don&rsquo;t hold that data yet.</p>
+    </div>
+
+    <div class="cards">
+      <div class="card">
+        <div class="h"><span class="pill warn">manual today</span></div>
+        <p>Those data slides are filled by the engagement team anyway&mdash;Templafy often leaves the partner name as a <span class="field">&lt;FirstName&gt;</span> placeholder too. So a proposal can ship now with those few slides completed by hand.</p>
+      </div>
+      <div class="card">
+        <div class="h"><span class="pill ok">path to 100%</span></div>
+        <p>Connect the same data sources Templafy uses (profile &rarr; partner, finance &rarr; fees, RFP system). Those ~5 slides then auto-fill, closing the last ~8% with no change to the rest of the engine.</p>
+      </div>
+    </div>
+
+    <div class="col">
+      <h3 style="font-size:1.15rem; margin:34px 0 6px">Keeping the rules correct over time</h3>
+      <p>Branded content changes. The engine is built so a non-technical user can keep it current&mdash;no code:</p>
+      <ul class="rows">
+        <li><span class="mk">&#8635;</span><span><b>Template updated?</b> Re-generate the reference decks and click <span class="field">Build library</span> once&mdash;the rules relearn themselves automatically.</span></li>
+        <li><span class="mk">&#128295;</span><span><b>A small wording miss?</b> The <b>Fixups</b> screen lets a user add a plain find-and-replace correction&mdash;and the app <b>suggests the fix</b> straight from the comparison, so they just confirm it.</span></li>
+        <li><span class="mk">&#9989;</span><span><b>Confidence built in.</b> A structural check and a slide-by-slide Diff run automatically, so a broken or drifted deck is caught before anyone opens it.</span></li>
+      </ul>
+      <p class="muted" style="margin-top:14px"><b>Manual effort remaining, per deck:</b> only the few data-driven slides&mdash;and only until the data sources are connected. Everything else is one click.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="col">
+      <div class="snum">06</div>
+      <h2>Extending to other templates</h2>
+      <p>This POC covers <strong>one template</strong> (the public-audit proposal). The engine itself is <strong>template-agnostic</strong>&mdash;it learns from whatever decks you give it. Onboarding another template (a different service line, a new region, a refreshed brand) is a <strong>data task, not an engineering task</strong>:</p>
+      <ol class="steps">
+        <li>Drop the new template&rsquo;s master deck into its own <span class="field">asset</span> folder.</li>
+        <li>Generate reference decks for that template&rsquo;s input values (one per option).</li>
+        <li>Click <span class="field">Build library</span> &mdash; the engine harvests the new rules on its own.</li>
+        <li>Reconstruct &amp; Diff to validate &mdash; same screens, same one-click checks.</li>
+      </ol>
+      <p class="muted" style="margin-top:18px">Each template keeps its own library, so templates never interfere with each other, and the same app scales across the whole proposal catalogue&mdash;replacing the Templafy license everywhere it&rsquo;s used.</p>
+    </div>
+  </section>
+
+  <footer>
+    <hr class="soft">
+    <div class="foot-line">
+      <span>Proposal Builder &middot; internal proof of concept</span>
+      <span>&middot;</span>
+      <span>Construct &rarr; Harvest &rarr; Reconstruct &rarr; Diff</span>
+      <span>&middot;</span>
+      <span>Deterministic &middot; no AI &middot; runs on-machine</span>
+    </div>
+  </footer>
+</div>
+</body>
+</html>

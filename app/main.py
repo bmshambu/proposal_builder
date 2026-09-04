@@ -238,6 +238,15 @@ async def diff_run_all(request: Request):
         decks=files, outputs=files, batch=summary, which=which))
 
 
+# ------------------------------------------------------------------ Docs
+@app.get("/docs-page", response_class=HTMLResponse)
+def docs_page():
+    p = config.ROOT / "docs" / "index.html"
+    if p.exists():
+        return HTMLResponse(p.read_text(encoding="utf-8"))
+    return HTMLResponse("<p>docs/index.html not found.</p>", status_code=404)
+
+
 # ------------------------------------------------------------------ download
 @app.get("/download")
 def download(path: str):
