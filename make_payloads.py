@@ -53,6 +53,15 @@ def write(name, overrides):
 
 
 def main():
+    # start clean so stale payloads from earlier runs don't linger and get harvested
+    import glob
+    removed = 0
+    for f in glob.glob(os.path.join(str(config.PAYLOADS_DIR), "*.json")):
+        os.remove(f)
+        removed += 1
+    if removed:
+        print("Removed %d existing payload(s) for a clean regenerate.\n" % removed)
+
     written = []
     # 00 baseline
     written.append(write("00_baseline", {}))
@@ -65,22 +74,26 @@ def main():
     written.append(write("12_audit_and_tax", {"audit_or_tax": "Audit & Tax"}))
     written.append(write("13_expansion", {"new_or_expansion": "Expansion of Services"}))
 
-    # 20.. sector sweep (sector + its first sub-sector co-vary)
-    i = 20
+    # FULL sector x sub-sector coverage: one OFAT deck per (sector, sub-sector)
+    # combination except the baseline (Technology/Software). This covers every
+    # sector value AND every sub-sector value in one pass.
+    i = 1
     for sec in schema.SECTORS:
-        if sec == "Technology":
-            continue
-        sub = schema.SUBSECTORS_BY_SECTOR[sec][0]
-        written.append(write("%d_sector_%s" % (i, _slug(sec)),
-                             {"sector": sec, "sub_sector": sub}))
-        i += 1
+        for sub in schema.SUBSECTORS_BY_SECTOR[sec]:
+            if sec == "Technology" and sub == "Software":
+                continue                       # baseline
+            written.append(write("sec%02d_%s__%s" % (i, _slug(sec)[:18], _slug(sub)[:18]),
+                                 {"sector": sec, "sub_sector": sub}))
+            i += 1
 
-    # 40.. Technology sub-sector variants (isolates the sub-sector effect)
-    j = 40
-    for sub in schema.SUBSECTORS_BY_SECTOR["Technology"]:
-        if sub == "Software":
+    # FULL city coverage: one OFAT deck per city except the baseline (New York).
+    # City names appear both dynamically and statically, so each must be a swap
+    # (a training deck), never a token.
+    j = 1
+    for city in schema.CITIES:
+        if city == "New York":
             continue
-        written.append(write("%d_sub_%s" % (j, _slug(sub)), {"sub_sector": sub}))
+        written.append(write("city%02d_%s" % (j, _slug(city)), {"city": city}))
         j += 1
 
     train_n = len(written)

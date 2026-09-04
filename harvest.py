@@ -32,9 +32,6 @@ import zipfile
 
 import pptx_forensics as pf
 
-# payload field whose value (a city name) appears as literal text in slides
-_CITY_KEY = "If_the_local_office_presence_important_select_the_appropriate_city"
-
 
 # ---------------------------------------------------------------- payloads
 def flatten(obj, prefix=""):
@@ -303,9 +300,12 @@ def build_library(baseline_pptx, baseline_payload, pairs, asset_dir):
     base = pf.load_deck(baseline_pptx)
     base_flat = flatten(baseline_payload)
 
-    # baseline literal token values to substitute later (client, date, city)
+    # baseline literal token values to substitute later (client name, date).
+    # NOTE: the city is deliberately NOT a token — its value ("New York") also
+    # appears in static content, and a blind replace would wrongly change those.
+    # The city change is captured per-slide as a swap from a city OFAT deck.
     token_baseline = {}
-    for key in ("FullClientName", "ShortClientName", "DueDate", _CITY_KEY):
+    for key in ("FullClientName", "ShortClientName", "DueDate"):
         if key in base_flat:
             token_baseline[key] = base_flat[key]
 
@@ -454,7 +454,7 @@ def _token_replacements(manifest, payload_flat, baseline_text=""):
     baseline deck text."""
     reps = []
     tb = manifest.get("token_baseline", {})
-    for key in ("FullClientName", "ShortClientName", _CITY_KEY):
+    for key in ("FullClientName", "ShortClientName"):
         base_val, new_val = tb.get(key), payload_flat.get(key)
         if base_val and new_val is not None and str(new_val) != str(base_val):
             reps.append((str(base_val), str(new_val)))
