@@ -27,7 +27,7 @@ sys.path.insert(0, ROOT)
 
 from engine import (Library, Rules, Template, build,          # noqa: E402
                     build_template, find_template, import_deck, list_templates)
-from engine import bindings, placeholders                     # noqa: E402
+from engine import bindings, ooxml as ooxmlmod, placeholders  # noqa: E402
 from engine import report as reportmod                        # noqa: E402
 from engine import svg as svgmod                              # noqa: E402
 from engine.assemble import AssemblyError                     # noqa: E402
@@ -914,6 +914,115 @@ class TestMasterMerge(EngineTestCase):
                                  "%s is a zip archive named .xml" % name)
         self.assertTrue(any(n.endswith(".xlsx") for n in z.namelist()),
                         "the workbook should keep its real extension")
+
+    def _two_master_decks(self):
+        """Decks with two masters, like a real branded template. The synthetic
+        library has one, which is why multi-master merging went untested."""
+        folder = os.path.join(self.work, "mm")
+        os.makedirs(folder, exist_ok=True)
+        for name in self.cases:
+            self._add_second_master(os.path.join(self.decks, name + ".pptx"),
+                                    os.path.join(folder, name + ".pptx"))
+        return folder
+
+    def _add_second_master(self, src, dst):
+        z = zipfile.ZipFile(src)
+        rt = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
+        base = "application/vnd.openxmlformats-officedocument.presentationml."
+        layout2 = z.read("ppt/slideLayouts/slideLayout1.xml").decode().replace(
+            'name="Blank"', 'name="Section"')
+        master2 = z.read("ppt/slideMasters/slideMaster1.xml").decode().replace(
+            "<p:spTree>", "<p:spTree><!--second-->")
+        prs = z.read("ppt/presentation.xml").decode().replace(
+            "</p:sldMasterIdLst>",
+            '<p:sldMasterId id="2147483649" r:id="rIdM2"/></p:sldMasterIdLst>')
+        prels = z.read("ppt/_rels/presentation.xml.rels").decode().replace(
+            "</Relationships>",
+            '<Relationship Id="rIdM2" Type="%sslideMaster" '
+            'Target="slideMasters/slideMaster2.xml"/></Relationships>' % rt)
+        ct = z.read("[Content_Types].xml").decode().replace(
+            "</Types>",
+            '<Override PartName="/ppt/slideMasters/slideMaster2.xml" '
+            'ContentType="%sslideMaster+xml"/>'
+            '<Override PartName="/ppt/slideLayouts/slideLayout2.xml" '
+            'ContentType="%sslideLayout+xml"/></Types>' % (base, base))
+        with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as out:
+            for info in z.infolist():
+                n = info.filename
+                if n == "ppt/presentation.xml":
+                    out.writestr(n, prs)
+                elif n == "ppt/_rels/presentation.xml.rels":
+                    out.writestr(n, prels)
+                elif n == "[Content_Types].xml":
+                    out.writestr(n, ct)
+                elif n in ("ppt/slides/_rels/slide2.xml.rels",
+                           "ppt/slides/_rels/slide3.xml.rels"):
+                    # slides present in BOTH decks, so the layout is actually
+                    # reached - retargeting ones that de-duplicate away would
+                    # leave the second master unused and prove nothing
+                    out.writestr(n, z.read(n).decode().replace(
+                        "slideLayout1.xml", "slideLayout2.xml"))
+                else:
+                    out.writestr(info, z.read(n))
+            out.writestr("ppt/slideMasters/slideMaster2.xml", master2)
+            out.writestr("ppt/slideMasters/_rels/slideMaster2.xml.rels",
+                         ooxmlmod.build_rels([
+                             '<Relationship Id="rId1" Type="%sslideLayout" '
+                             'Target="../slideLayouts/slideLayout2.xml"/>' % rt,
+                             '<Relationship Id="rId2" Type="%stheme" '
+                             'Target="../theme/theme1.xml"/>' % rt]))
+            out.writestr("ppt/slideLayouts/slideLayout2.xml", layout2)
+            out.writestr("ppt/slideLayouts/_rels/slideLayout2.xml.rels",
+                         ooxmlmod.build_rels([
+                             '<Relationship Id="rId1" Type="%sslideMaster" '
+                             'Target="../slideMasters/slideMaster2.xml"/>' % rt]))
+        z.close()
+
+    def test_a_multi_master_merge_keeps_both_masters_and_validates(self):
+        """A layout that slides use, that names its master, but that the master
+        does not list, makes PowerPoint repair the deck and then give up. Every
+        individual relationship still resolves, so no link check catches it -
+        the validator's master/layout consistency check does."""
+        decks = self._two_master_decks()
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = self.bmd.main([decks, "--templates", self.roots,
+                                  "--name", "mm", "--overwrite"])
+        self.assertEqual(code, 0)
+        library = os.path.join(self.roots, "mm", "library.pptx")
+        z = zipfile.ZipFile(library)
+        masters = [n for n in z.namelist()
+                   if "slideMasters/slideMaster" in n and n.endswith(".xml")]
+        layouts = [n for n in z.namelist()
+                   if "slideLayouts/slideLayout" in n and n.endswith(".xml")]
+        self.assertEqual(len(masters), 2, "both masters should survive")
+        self.assertEqual(len(layouts), 2, "both layouts should survive")
+
+        from engine import validate as validator
+        self.assertEqual(validator.validate(library), [])
+
+    def test_the_validator_catches_an_orphaned_layout(self):
+        """The check that was missing when PowerPoint refused a library this
+        tool had just called clean."""
+        decks = self._two_master_decks()
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.bmd.main([decks, "--templates", self.roots, "--name", "orph",
+                           "--overwrite"])
+        library = os.path.join(self.roots, "orph", "library.pptx")
+        damaged = os.path.join(self.work, "orphaned.pptx")
+        z = zipfile.ZipFile(library)
+        with zipfile.ZipFile(damaged, "w") as out:
+            for info in z.infolist():
+                body = z.read(info.filename)
+                if ("slideMasters/slideMaster" in info.filename
+                        and info.filename.endswith(".xml")):
+                    # drop one layout from the master's list, leaving the
+                    # layout itself present and still pointing back
+                    body = re.sub(rb'<p:sldLayoutId [^>]*/>', b'', body)
+                out.writestr(info.filename, body)
+        z.close()
+        from engine import validate as validator
+        codes = [i[0] for i in validator.validate(damaged)]
+        self.assertIn("orphan-layout", codes)
 
     # -- rule proposal ----------------------------------------------------
     def test_the_controlling_answer_is_identified(self):

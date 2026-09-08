@@ -186,6 +186,11 @@ _VOLATILE = [
 ]
 
 
+def _natural(name):
+    """Sort slideLayout2 before slideLayout10."""
+    return [int(t) if t.isdigit() else t for t in re.split(r'(\d+)', name)]
+
+
 def _normalise_for_hash(data):
     """Strip the bits PowerPoint re-stamps on every save, for comparison only."""
     for pattern in _VOLATILE:
@@ -434,7 +439,100 @@ class Merger:
         return touched
 
     # -- output -------------------------------------------------------
+    def _finalise_masters(self):
+        """Rebuild every master's layout list from the layouts that actually
+        point at it.
+
+        A master's `<p:sldLayoutIdLst>` and its .rels come from whichever deck
+        introduced it. Later decks add layouts that attach to that same master —
+        but the master was already imported, so its list was never extended. The
+        result is a layout that slides use, that names a master, and that the
+        master does not list: an orphan. PowerPoint repairs the file, then gives
+        up on it, and none of the relationship checks notice because every
+        individual link resolves.
+
+        Deriving the list from the back-references makes the two sides agree by
+        construction rather than by luck.
+        """
+        masters = [p for p in self.out.parts
+                   if p.startswith("ppt/slideMasters/") and p.endswith(".xml")]
+        layouts = [p for p in self.out.parts
+                   if p.startswith("ppt/slideLayouts/") and p.endswith(".xml")]
+        if not masters:
+            return
+
+        owned, orphans = {m: [] for m in masters}, []
+        for layout in sorted(layouts, key=_natural):
+            rels_part = ooxml.rels_part_for(layout)
+            target = None
+            for tag in ooxml.rel_tags(self.out.parts.get(rels_part, b"").decode(
+                    "utf-8", "ignore")):
+                if "slideMaster" in (ooxml.rel_attr(tag, "Type") or ""):
+                    target = (ooxml.rel_attr(tag, "Target") or "").lstrip("/")
+                    break
+            if target in owned:
+                owned[target].append(layout)
+            else:
+                orphans.append(layout)
+        for layout in orphans:
+            # a layout whose master did not survive still has to belong to one
+            owned[masters[0]].append(layout)
+            self._repoint_layout(layout, masters[0])
+
+        layout_id = 2147483649
+        for master in masters:
+            rels_part = ooxml.rels_part_for(master)
+            kept, used_ids = [], set()
+            for tag in ooxml.rel_tags(self.out.parts.get(rels_part, b"").decode(
+                    "utf-8", "ignore")):
+                if "slideLayout" in (ooxml.rel_attr(tag, "Type") or ""):
+                    continue                    # rebuilt below
+                kept.append(tag)
+                used_ids.add(ooxml.rel_attr(tag, "Id"))
+
+            minter = ooxml.RelIdMinter(used_ids)
+            entries, ids = [], []
+            for layout in owned[master]:
+                rid = minter.mint()
+                ids.append(rid)
+                entries.append(
+                    '<Relationship Id="%s" Type="http://schemas.openxmlformats'
+                    '.org/officeDocument/2006/relationships/slideLayout" '
+                    'Target="%s"/>' % (rid, _abs_target(layout)))
+            self.out.parts[rels_part] = ooxml.build_rels(kept + entries).encode("utf-8")
+
+            body = self.out.parts[master].decode("utf-8", "ignore")
+            listing = "".join('<p:sldLayoutId id="%d" r:id="%s"/>'
+                              % (layout_id + n, rid) for n, rid in enumerate(ids))
+            layout_id += len(ids)
+            if re.search(r'<p:sldLayoutIdLst\b', body):
+                body = re.sub(r'<p:sldLayoutIdLst\b.*?</p:sldLayoutIdLst>',
+                              '<p:sldLayoutIdLst>%s</p:sldLayoutIdLst>' % listing,
+                              body, flags=re.DOTALL)
+                body = re.sub(r'<p:sldLayoutIdLst\s*/>',
+                              '<p:sldLayoutIdLst>%s</p:sldLayoutIdLst>' % listing,
+                              body)
+            else:
+                body = body.replace('</p:cSld>',
+                                    '</p:cSld><p:sldLayoutIdLst>%s</p:sldLayoutIdLst>'
+                                    % listing, 1)
+            self.out.parts[master] = body.encode("utf-8")
+
+    def _repoint_layout(self, layout, master):
+        rels_part = ooxml.rels_part_for(layout)
+        tags = []
+        for tag in ooxml.rel_tags(self.out.parts.get(rels_part, b"").decode(
+                "utf-8", "ignore")):
+            if "slideMaster" in (ooxml.rel_attr(tag, "Type") or ""):
+                rid = ooxml.rel_attr(tag, "Id")
+                tag = ('<Relationship Id="%s" Type="http://schemas.openxmlformats'
+                       '.org/officeDocument/2006/relationships/slideMaster" '
+                       'Target="%s"/>' % (rid, _abs_target(master)))
+            tags.append(tag)
+        self.out.parts[rels_part] = ooxml.build_rels(tags).encode("utf-8")
+
     def write(self, out_path):
+        self._finalise_masters()
         slides = [self.seen[i]["part"] for i in self.order]
         if not slides:
             raise SystemExit("no slides found in any deck")

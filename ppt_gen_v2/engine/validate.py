@@ -147,7 +147,103 @@ def validate(path):
                     issues.append(("duplicate-id", "ppt/presentation.xml",
                                    "%s id %s used more than once" % (what, m.group(1))))
                 seen.add(m.group(1))
+
+    issues.extend(_check_master_layout_consistency(zf, nameset))
     zf.close()
+    return issues
+
+
+def _rels_of(zf, nameset, part):
+    """[(rId, type, resolved target)] for one part's internal relationships."""
+    d, base = os.path.dirname(part), os.path.basename(part)
+    rels_name = ("%s/_rels/%s.rels" % (d, base)) if d else "_rels/%s.rels" % base
+    if rels_name not in nameset:
+        return []
+    try:
+        xml = zf.read(rels_name).decode("utf-8", "ignore")
+    except KeyError:
+        return []
+    out = []
+    for tag in re.findall(r'<Relationship\b[^>]*?/>', xml):
+        if 'TargetMode="External"' in tag:
+            continue
+        rid = re.search(r'Id="([^"]+)"', tag)
+        rtype = re.search(r'Type="([^"]+)"', tag)
+        target = re.search(r'Target="([^"]+)"', tag)
+        if rid and target:
+            out.append((rid.group(1), rtype.group(1) if rtype else "",
+                        _resolve(part, target.group(1))))
+    return out
+
+
+def _check_master_layout_consistency(zf, nameset):
+    """Masters and layouts must agree about each other.
+
+    Every individual relationship can resolve and the package still be one
+    PowerPoint refuses: a layout that slides use, that names its master, but
+    that the master does not list in `<p:sldLayoutIdLst>`, is an orphan. So is
+    a master that exists but is not registered in presentation.xml. Neither
+    shows up as a broken link, because no link is broken - the two sides simply
+    disagree.
+    """
+    issues = []
+    masters = sorted(n for n in nameset
+                     if n.startswith("ppt/slideMasters/slideMaster")
+                     and n.endswith(".xml"))
+    layouts = sorted(n for n in nameset
+                     if n.startswith("ppt/slideLayouts/slideLayout")
+                     and n.endswith(".xml"))
+    if not masters:
+        return issues
+
+    # which layouts each master lists
+    listed = {}
+    for master in masters:
+        by_id = {rid: target for rid, _t, target in _rels_of(zf, nameset, master)}
+        try:
+            body = zf.read(master).decode("utf-8", "ignore")
+        except KeyError:
+            continue
+        for m in re.finditer(r'<p:sldLayoutId\b[^>]*\br:id="([^"]+)"', body):
+            target = by_id.get(m.group(1))
+            if target is None:
+                issues.append(("missing-rel", master,
+                               "sldLayoutId uses %s but it's not in the .rels"
+                               % m.group(1)))
+            else:
+                listed.setdefault(target, []).append(master)
+
+    for layout in layouts:
+        owners = listed.get(layout, [])
+        if not owners:
+            issues.append(("orphan-layout", layout,
+                           "no slide master lists this layout in its "
+                           "sldLayoutIdLst - PowerPoint will try to repair"))
+        elif len(owners) > 1:
+            issues.append(("shared-layout", layout,
+                           "listed by %d masters (%s) - a layout belongs to one"
+                           % (len(owners), ", ".join(os.path.basename(o)
+                                                     for o in owners))))
+        back = [t for _r, ty, t in _rels_of(zf, nameset, layout)
+                if "slideMaster" in ty]
+        if not back:
+            issues.append(("layout-without-master", layout,
+                           "the layout has no relationship to a slide master"))
+        elif owners and back[0] not in owners:
+            issues.append(("layout-master-mismatch", layout,
+                           "points at %s but is listed by %s"
+                           % (os.path.basename(back[0]),
+                              os.path.basename(owners[0]))))
+
+    # every master must be registered in presentation.xml
+    if "ppt/presentation.xml" in nameset:
+        registered = {t for _r, ty, t in _rels_of(zf, nameset, "ppt/presentation.xml")
+                      if ty.endswith("/slideMaster")}
+        for master in masters:
+            if master not in registered:
+                issues.append(("unregistered-master", master,
+                               "not listed in presentation.xml.rels - a master "
+                               "the presentation does not know about"))
     return issues
 
 
