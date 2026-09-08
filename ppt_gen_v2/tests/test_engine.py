@@ -1,0 +1,704 @@
+#!/usr/bin/env python3
+"""Regression tests for the v2 engine. Standard library only:
+
+    python tests/test_engine.py
+
+Each test that guards a v1 scar says which one, so nobody "simplifies" the fix
+back out. Run this before every commit that touches engine/.
+"""
+import importlib.util
+import json
+import os
+import re
+import shutil
+import sys
+import tempfile
+import time
+import unittest
+import xml.etree.ElementTree as ET
+import xml.parsers.expat
+import zipfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, ROOT)
+
+from engine import (Library, Rules, Template, build,          # noqa: E402
+                    build_template, find_template, import_deck, list_templates)
+from engine import bindings, placeholders                     # noqa: E402
+from engine import svg as svgmod                              # noqa: E402
+from engine.assemble import AssemblyError                     # noqa: E402
+from engine.library import LibraryError                       # noqa: E402
+from engine.rules import RulesError, evaluate                 # noqa: E402
+from engine.template import TemplateError                     # noqa: E402
+
+DEMO = os.path.join(ROOT, "templates", "demo")
+LIBRARY = os.path.join(DEMO, "library.pptx")
+A_T = re.compile(r'<a:t(?:\s[^>]*)?>(.*?)</a:t>', re.DOTALL)
+
+
+def _validator():
+    path = os.path.join(os.path.dirname(ROOT), "validate_pptx.py")
+    if not os.path.exists(path):
+        return None
+    spec = importlib.util.spec_from_file_location("validate_pptx", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _json(name):
+    with open(os.path.join(DEMO, name), encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _slide_parts(zf):
+    return sorted((n for n in zf.namelist()
+                   if re.match(r'ppt/slides/slide\d+\.xml$', n)),
+                  key=lambda n: int(re.search(r'\d+', os.path.basename(n)).group()))
+
+
+def _deck_text(path):
+    zf = zipfile.ZipFile(path)
+    return "\n".join(" ".join(A_T.findall(zf.read(n).decode("utf-8")))
+                     for n in _slide_parts(zf))
+
+
+class EngineTestCase(unittest.TestCase):
+    """Builds land in a temp dir so a failing run leaves nothing behind."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.exists(LIBRARY):
+            sys.path.insert(0, os.path.join(ROOT, "tools"))
+            from make_demo_library import write_library
+            write_library(LIBRARY)
+        cls.tmp = tempfile.mkdtemp(prefix="pptgen2_")
+        cls.rules = Rules.load(os.path.join(DEMO, "rules.json"))
+        cls.data = _json("data_sources.json")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def out(self, name):
+        return os.path.join(self.tmp, name)
+
+    def build(self, answers_file, name, **kw):
+        return build(LIBRARY, self.rules, _json(answers_file), self.out(name),
+                     data_sources=self.data, **kw)
+
+
+# ---------------------------------------------------------------- library
+class TestLibrary(EngineTestCase):
+    def test_every_slide_is_a_marked_block(self):
+        with Library(LIBRARY) as lib:
+            self.assertEqual(len(lib.blocks), 9)
+            unmarked = [b.id for b in lib.blocks.values() if not b.marked]
+            self.assertEqual(unmarked, [], "every demo slide must carry a marker")
+
+    def test_blocks_are_indexed_in_presentation_order(self):
+        with Library(LIBRARY) as lib:
+            self.assertEqual([b["id"] for b in lib.summary()][:3],
+                             ["cover", "about_us", "our_team"])
+
+    def test_split_placeholder_is_still_discovered(self):
+        """`{{City}}` is authored across four runs on the contacts slide —
+        the risk flagged in v2-plan §8. It must still be found."""
+        with Library(LIBRARY) as lib:
+            self.assertIn("City", lib.block("contacts").placeholders)
+
+    def test_missing_block_names_what_is_available(self):
+        with Library(LIBRARY) as lib:
+            with self.assertRaises(LibraryError) as cm:
+                lib.block("nope")
+            self.assertIn("cover", str(cm.exception))
+
+
+# ---------------------------------------------------------------- rules
+class TestRules(EngineTestCase):
+    def test_condition_operators(self):
+        a = {"AuditType": "Expansion of Services", "Year": 2026, "Blank": ""}
+        self.assertTrue(evaluate("always", a))
+        self.assertFalse(evaluate("never", a))
+        self.assertTrue(evaluate({"field": "AuditType", "eq": "Expansion of Services"}, a))
+        self.assertTrue(evaluate({"field": "Year", "eq": "2026"}, a), "compares as strings")
+        self.assertTrue(evaluate({"field": "AuditType", "in": ["Statutory Audit",
+                                                               "Expansion of Services"]}, a))
+        self.assertTrue(evaluate({"field": "AuditType", "ne": "Statutory Audit"}, a))
+        self.assertTrue(evaluate({"field": "Blank", "exists": False}, a))
+        self.assertTrue(evaluate({"all": [{"field": "Year", "eq": 2026},
+                                          {"field": "AuditType", "exists": True}]}, a))
+        self.assertTrue(evaluate({"any": [{"field": "Year", "eq": 1999},
+                                          {"field": "AuditType", "exists": True}]}, a))
+        self.assertTrue(evaluate({"not": {"field": "Year", "eq": 1999}}, a))
+
+    def test_condition_matching_tolerates_case_and_spacing(self):
+        """Answers come from forms; a rule must not silently miss on a stray
+        space or capital."""
+        a = {"AuditType": "  expansion   of services "}
+        self.assertTrue(evaluate({"field": "AuditType", "eq": "Expansion of Services"}, a))
+
+    def test_condition_without_operator_is_an_error(self):
+        with self.assertRaises(RulesError):
+            evaluate({"field": "AuditType"}, {})
+
+    def test_baseline_selection(self):
+        order, trace = self.rules.select(_json("answers.baseline.json"))
+        self.assertEqual([b for b, _ in order],
+                         ["cover", "about_us", "our_team", "approach",
+                          "scope", "fees", "contacts"])
+        self.assertEqual(trace, [], "baseline answers trigger no rules")
+
+    def test_conditional_block_lands_at_its_anchor(self):
+        order, _ = self.rules.select(_json("answers.expansion.json"))
+        ids = [b for b, _ in order]
+        self.assertEqual(ids.index("expansion_detail"), ids.index("approach") + 1)
+
+    def test_variant_swaps_content_without_moving_the_block(self):
+        base, _ = self.rules.select(_json("answers.baseline.json"))
+        exp, _ = self.rules.select(_json("answers.expansion.json"))
+        self.assertEqual(dict(base)["scope"], "scope")
+        self.assertEqual(dict(exp)["scope"], "scope_expansion")
+        self.assertEqual([b for b, _ in base].index("scope") + 1,   # +1: one block added above
+                         [b for b, _ in exp].index("scope"))
+
+    def test_selection_is_deterministic(self):
+        answers = _json("answers.expansion.json")
+        runs = {tuple(self.rules.select(answers)[0]) for _ in range(5)}
+        self.assertEqual(len(runs), 1)
+
+    def test_rules_are_checked_against_the_library(self):
+        bad = Rules({"baseline": ["cover", "ghost"],
+                     "blocks": {"ghost": {"slides": ["ghost"], "when": "always"}}})
+        with Library(LIBRARY) as lib:
+            self.assertTrue(any("ghost" in p for p in bad.check_against(lib)))
+
+
+# ---------------------------------------------------------------- placeholders
+class TestPlaceholders(EngineTestCase):
+    def test_runs_are_stitched_before_substitution(self):
+        para = ('<a:p><a:r><a:t>Local office: </a:t></a:r><a:r><a:t>{{Ci</a:t></a:r>'
+                '<a:r><a:t>ty</a:t></a:r><a:r><a:t>}}</a:t></a:r></a:p>')
+        out = placeholders.apply(para, {"City": "Leeds"})
+        self.assertIn("Leeds", "".join(A_T.findall(out)))
+        self.assertNotIn("{{", out)
+        self.assertEqual(out.count("<a:r>"), 4, "runs are edited, never removed")
+
+    def test_two_split_placeholders_in_one_paragraph(self):
+        """Offsets shift as each placeholder is stitched — hence right-to-left."""
+        para = ('<a:p><a:r><a:t>{{A</a:t></a:r><a:r><a:t>aa}} and {{B</a:t></a:r>'
+                '<a:r><a:t>bb}}</a:t></a:r></a:p>')
+        out = placeholders.apply(para, {"Aaa": "first", "Bbb": "second"})
+        self.assertEqual("".join(A_T.findall(out)), "first and second")
+
+    def test_table_markup_is_never_treated_as_text(self):
+        """v1's worst bug: a loose <a:t[^>]*> also matched <a:tbl>/<a:tc>/<a:tr>
+        and escaped whole tables into garbage (v1-learnings §2)."""
+        tbl = ('<a:tbl><a:tblPr firstRow="1"/><a:tr h="10"><a:tc><a:txBody>'
+               '<a:p><a:r><a:t>{{ClientName}}</a:t></a:r></a:p></a:txBody></a:tc>'
+               '</a:tr></a:tbl>')
+        out = placeholders.apply(tbl, {"ClientName": "Acme"})
+        self.assertIn("<a:tbl>", out)
+        self.assertIn("<a:tc>", out)
+        self.assertNotIn("&lt;a:tbl", out)
+        self.assertIn("<a:t>Acme</a:t>", out)
+
+    def test_unknown_placeholder_is_left_visible(self):
+        para = '<a:p><a:r><a:t>Hello {{Nobody}}</a:t></a:r></a:p>'
+        self.assertIn("{{Nobody}}", placeholders.apply(para, {"Someone": "x"}))
+
+    def test_values_containing_markup_are_escaped(self):
+        para = '<a:p><a:r><a:t>{{Name}}</a:t></a:r></a:p>'
+        out = placeholders.apply(para, {"Name": 'Smith & <Sons>'})
+        self.assertIn("Smith &amp; &lt;Sons&gt;", out)
+        xml.parsers.expat.ParserCreate().Parse("<r>%s</r>" % out, True)
+
+    def test_marker_removal_takes_the_whole_shape(self):
+        sp = ('<p:spTree><p:sp><p:nvSpPr><p:cNvPr id="9" name="keep"/></p:nvSpPr>'
+              '<p:txBody><a:p><a:r><a:t>real content</a:t></a:r></a:p></p:txBody></p:sp>'
+              '<p:sp><p:nvSpPr><p:cNvPr id="10" name="block-marker"/></p:nvSpPr>'
+              '<p:txBody><a:p><a:r><a:t>{{block:cover}}</a:t></a:r></a:p></p:txBody>'
+              '</p:sp></p:spTree>')
+        out = placeholders.strip_marker(sp)
+        self.assertNotIn("{{block:", out)
+        self.assertIn("real content", out)
+        self.assertEqual(out.count("<p:sp>"), 1)
+        self.assertEqual(out.count("</p:sp>"), 1)
+
+    def test_marker_inside_a_group_removes_only_its_own_shape(self):
+        grouped = ('<p:grpSp><p:sp><p:txBody><a:p><a:r><a:t>{{block:x}}</a:t>'
+                   '</a:r></a:p></p:txBody></p:sp><p:sp><p:txBody><a:p><a:r>'
+                   '<a:t>sibling</a:t></a:r></a:p></p:txBody></p:sp></p:grpSp>')
+        out = placeholders.strip_marker(grouped)
+        self.assertIn("sibling", out)
+        self.assertIn("</p:grpSp>", out)
+        self.assertEqual(out.count("<p:sp>"), 1)
+
+
+# ---------------------------------------------------------------- bindings
+class TestBindings(EngineTestCase):
+    def test_field_data_and_literal(self):
+        spec = {"{{A}}": {"from": "field", "field": "Client.Name"},
+                "{{B}}": {"from": "data", "source": "profile", "key": "lead_partner"},
+                "{{C}}": {"from": "literal", "value": "Demo LLP"}}
+        vals, missing = bindings.resolve(spec, {"Client": {"Name": "Acme"}},
+                                         {"profile": {"lead_partner": "Dana"}})
+        self.assertEqual(vals, {"A": "Acme", "B": "Dana", "C": "Demo LLP"})
+        self.assertEqual(missing, [])
+
+    def test_date_formats(self):
+        vals, _ = bindings.resolve(
+            {"{{D}}": {"from": "field", "field": "DueDate", "format": "long_comma"}},
+            {"DueDate": "20261130"})
+        self.assertEqual(vals["D"], "November 30, 2026")
+
+    def test_unwired_data_source_is_named_not_guessed(self):
+        vals, missing = bindings.resolve(
+            {"{{P}}": {"from": "data", "source": "finance", "key": "total"}}, {}, {})
+        self.assertEqual(vals, {})
+        self.assertEqual(len(missing), 1)
+        self.assertIn("finance", missing[0])
+
+
+# ---------------------------------------------------------------- assembly
+class TestAssembly(EngineTestCase):
+    def test_baseline_deck(self):
+        r = self.build("answers.baseline.json", "baseline.pptx")
+        self.assertEqual(r["slides"], 7)
+        self.assertEqual(r["unfilled_placeholders"], [])
+        self.assertEqual(r["unresolved_bindings"], [])
+
+    def test_expansion_deck_differs_correctly(self):
+        r = self.build("answers.expansion.json", "expansion.pptx")
+        self.assertEqual(r["slides"], 8)
+        blocks = [s["block"] for s in r["order"]]
+        self.assertIn("expansion_detail", blocks)
+        text = _deck_text(r["out"])
+        self.assertIn("Scope of work — expanded", text)
+        self.assertNotIn("Review of the interim financial information", text)
+
+    def test_both_decks_validate(self):
+        """Decision D5: a build that does not pass never reaches a user."""
+        v = _validator()
+        if v is None:
+            self.skipTest("validate_pptx.py not available")
+        for answers, name in (("answers.baseline.json", "v1.pptx"),
+                              ("answers.expansion.json", "v2.pptx")):
+            r = self.build(answers, name)
+            self.assertEqual(v.validate(r["out"]), [], "%s must validate" % name)
+
+    def test_every_part_of_the_output_is_well_formed(self):
+        """The v1 validator once passed malformed decks because it never parsed
+        the XML. Parse every part, always."""
+        r = self.build("answers.expansion.json", "wf.pptx")
+        zf = zipfile.ZipFile(r["out"])
+        for name in zf.namelist():
+            if name.endswith((".xml", ".rels")):
+                xml.parsers.expat.ParserCreate().Parse(zf.read(name), True)
+
+    def test_markers_never_ship(self):
+        r = self.build("answers.baseline.json", "markers.pptx")
+        zf = zipfile.ZipFile(r["out"])
+        for n in _slide_parts(zf):
+            self.assertNotIn("{{block:", zf.read(n).decode("utf-8"))
+
+    def test_relationship_ids_are_unique_per_part(self):
+        r = self.build("answers.expansion.json", "rels.pptx")
+        zf = zipfile.ZipFile(r["out"])
+        for name in zf.namelist():
+            if not name.endswith(".rels"):
+                continue
+            ids = re.findall(r'Id="([^"]+)"', zf.read(name).decode("utf-8"))
+            self.assertEqual(len(ids), len(set(ids)), "duplicate rIds in %s" % name)
+
+    def test_slide_ids_are_unique_and_in_order(self):
+        r = self.build("answers.expansion.json", "sldids.pptx")
+        prs = zipfile.ZipFile(r["out"]).read("ppt/presentation.xml").decode("utf-8")
+        ids = re.findall(r'<p:sldId id="(\d+)"', prs)
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertEqual(len(ids), r["slides"])
+
+    def test_every_part_has_a_content_type(self):
+        r = self.build("answers.baseline.json", "ct.pptx")
+        zf = zipfile.ZipFile(r["out"])
+        ct = zf.read("[Content_Types].xml").decode("utf-8")
+        defaults = set(re.findall(r'<Default\b[^>]*Extension="([^"]+)"', ct))
+        for name in zf.namelist():
+            if name == "[Content_Types].xml":
+                continue
+            # rsplit, not splitext: '_rels/.rels' has no stem, so splitext
+            # reports no extension for it.
+            base = os.path.basename(name)
+            ext = base.rsplit(".", 1)[1].lower() if "." in base else ""
+            has = ('PartName="/%s"' % name) in ct or ext in defaults
+            self.assertTrue(has, "%s has no content type" % name)
+
+    def test_no_dangling_or_stale_slide_declarations(self):
+        """Content-type Overrides for library slides we did not emit would point
+        at parts that are not in the package."""
+        r = self.build("answers.baseline.json", "stale.pptx")
+        zf = zipfile.ZipFile(r["out"])
+        ct = zf.read("[Content_Types].xml").decode("utf-8")
+        declared = set(re.findall(r'<Override\b[^>]*PartName="/(ppt/slides/[^"]+)"', ct))
+        self.assertEqual(declared, set(_slide_parts(zf)))
+
+    def test_a_block_may_appear_twice(self):
+        """Repeating a block must emit two distinct parts, not one shared one."""
+        rules = Rules({"baseline": ["cover", "about_us", "cover"],
+                       "placeholders": {"{{ClientName}}": {"from": "literal",
+                                                           "value": "Acme"}}})
+        r = build(LIBRARY, rules, {}, self.out("twice.pptx"), data_sources={})
+        self.assertEqual(r["slides"], 3)
+        zf = zipfile.ZipFile(r["out"])
+        self.assertEqual(len(_slide_parts(zf)), 3)
+        v = _validator()
+        if v:
+            self.assertEqual(v.validate(r["out"]), [])
+
+    def test_strict_refuses_to_ship_a_gap(self):
+        with self.assertRaises(AssemblyError):
+            build(LIBRARY, self.rules, _json("answers.baseline.json"),
+                  self.out("strict.pptx"), data_sources={}, strict=True)
+        self.assertFalse(os.path.exists(self.out("strict.pptx")),
+                         "a failed strict build must not leave a deck behind")
+
+    def test_unwired_bindings_are_reported_but_build_succeeds(self):
+        r = build(LIBRARY, self.rules, _json("answers.baseline.json"),
+                  self.out("loose.pptx"), data_sources={})
+        self.assertTrue(r["unresolved_bindings"])
+        self.assertIn("LeadPartner", " ".join(r["unfilled_placeholders"]))
+        self.assertTrue(os.path.exists(r["out"]))
+
+    def test_empty_selection_is_refused(self):
+        rules = Rules({"baseline": ["cover"],
+                       "blocks": {"cover": {"slides": ["cover"], "when": "never"}}})
+        with self.assertRaises(AssemblyError):
+            build(LIBRARY, rules, {}, self.out("empty.pptx"))
+
+    def test_the_same_inputs_produce_the_same_deck(self):
+        """Determinism is the whole promise: no AI, no clock, no randomness."""
+        a = self.build("answers.expansion.json", "det1.pptx")
+        b = self.build("answers.expansion.json", "det2.pptx")
+        za, zb = zipfile.ZipFile(a["out"]), zipfile.ZipFile(b["out"])
+        self.assertEqual(sorted(za.namelist()), sorted(zb.namelist()))
+        for n in za.namelist():
+            self.assertEqual(za.read(n), zb.read(n), "%s differs between builds" % n)
+
+
+# ---------------------------------------------------------------- templates
+class TestTemplates(EngineTestCase):
+    """Adding a template must be a file operation, never a code change.
+
+    The fixture is the demo deck with every `{{block:id}}` marker removed —
+    a stand-in for a firm's existing template that nobody has annotated.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.fixture = os.path.join(HERE, "fixtures", "office_template.pptx")
+        if not os.path.exists(cls.fixture):
+            os.makedirs(os.path.dirname(cls.fixture), exist_ok=True)
+            sys.path.insert(0, os.path.join(ROOT, "tools"))
+            import make_demo_library as mk
+            was, mk.MARKERS = mk.MARKERS, False
+            try:
+                mk.write_library(cls.fixture)
+            finally:
+                mk.MARKERS = was
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="pptgen2_tpl_", dir=self.tmp)
+
+    def imported(self, name="office", **kw):
+        return import_deck(self.fixture, self.root, name=name, **kw)
+
+    # -- identity ---------------------------------------------------------
+    def test_unmarked_deck_gets_ids_from_slide_titles(self):
+        r = self.imported()
+        self.assertEqual(r["ids_from_markers"], 0)
+        self.assertEqual(r["ids_from_position"], 0)
+        self.assertEqual(r["ids_from_titles"], r["slides"])
+        ids = [b["id"] for b in r["blocks"]]
+        self.assertIn("about_us", ids)
+        self.assertIn("proposed_fees", ids)
+
+    def test_a_marker_beats_the_sidecar(self):
+        """The deck is the source of truth when it says something."""
+        with Library(LIBRARY, block_map={"slide1.xml": "from_sidecar"}) as lib:
+            self.assertIn("cover", lib.blocks)
+            self.assertNotIn("from_sidecar", lib.blocks)
+            self.assertEqual(lib.block("cover").source, "marker")
+
+    def test_the_sidecar_beats_a_guessed_title(self):
+        with Library(self.fixture, block_map={"slide2.xml": "the_firm"}) as lib:
+            self.assertIn("the_firm", lib.blocks)
+            self.assertEqual(lib.block("the_firm").source, "map")
+            self.assertNotIn("about_us", lib.blocks)
+
+    def test_sidecar_ids_survive_a_deck_reorder(self):
+        """Positional ids break on reorder; that is the whole reason the sidecar
+        exists. Mapped ids are keyed to the slide part, not its position."""
+        with Library(self.fixture) as lib:
+            by_part = {os.path.basename(b.part): b.id for b in lib.ordered()}
+        mapping = {"slide9.xml": "contacts", "slide1.xml": "cover"}
+        with Library(self.fixture, block_map=mapping) as lib:
+            self.assertEqual(lib.block("contacts").part, "ppt/slides/slide9.xml")
+            self.assertEqual(lib.block("cover").part, "ppt/slides/slide1.xml")
+        self.assertNotEqual(by_part["slide9.xml"], "contacts",
+                            "the guessed id differs — so the map really was used")
+
+    def test_two_slides_with_the_same_title_do_not_collide(self):
+        r = self.imported()
+        ids = [b["id"] for b in r["blocks"]]
+        self.assertEqual(len(ids), len(set(ids)))
+
+    def test_duplicate_ids_in_the_sidecar_are_refused(self):
+        """A guessed clash is disambiguated; a declared clash is an error."""
+        with self.assertRaises(LibraryError):
+            Library(self.fixture, block_map={"slide1.xml": "same",
+                                             "slide2.xml": "same"})
+
+    def test_strict_ids_refuses_a_deck_nothing_names(self):
+        with self.assertRaises(LibraryError):
+            Library(self.fixture, block_map={}, strict_ids=True)
+
+    # -- the import contract ----------------------------------------------
+    def test_import_writes_a_template_that_builds_with_no_edits(self):
+        r = self.imported()
+        for f in ("template.json", "library.pptx", "blocks.json", "rules.json"):
+            self.assertTrue(os.path.exists(os.path.join(r["folder"], f)), f)
+        tpl = Template(r["folder"])
+        report = build_template(tpl, {}, self.out("imported.pptx"))
+        self.assertEqual(report["slides"], r["slides"],
+                         "starter rules = every slide, in the deck's own order")
+        v = _validator()
+        if v:
+            self.assertEqual(v.validate(report["out"]), [])
+
+    def test_import_copies_the_deck_byte_for_byte(self):
+        """We never modify the source template — that is the promise that makes
+        importing a firm deck safe."""
+        r = self.imported()
+        self.assertEqual(open(self.fixture, "rb").read(),
+                         open(r["library"], "rb").read())
+
+    def test_import_discovers_and_pre_binds_placeholders(self):
+        r = self.imported()
+        rules = json.load(open(os.path.join(r["folder"], "rules.json"),
+                               encoding="utf-8"))
+        self.assertIn("{{ClientName}}", rules["placeholders"])
+        self.assertEqual(rules["placeholders"]["{{ClientName}}"],
+                         {"from": "field", "field": "ClientName"})
+
+    def test_import_refuses_a_non_pptx(self):
+        junk = os.path.join(self.root, "notes.txt")
+        open(junk, "w").write("not a deck")
+        with self.assertRaises(TemplateError):
+            import_deck(junk, self.root, name="junk")
+
+    def test_import_will_not_silently_replace_a_template(self):
+        self.imported()
+        with self.assertRaises(TemplateError):
+            self.imported()
+        self.imported(overwrite=True)          # explicit is fine
+
+    def test_a_failed_import_leaves_nothing_behind(self):
+        bad = os.path.join(self.root, "empty.pptx")
+        with zipfile.ZipFile(bad, "w") as z:
+            z.writestr("hello.txt", "not a deck")
+        with self.assertRaises(LibraryError):
+            import_deck(bad, self.root, name="broken")
+        self.assertFalse(os.path.exists(os.path.join(self.root, "broken")))
+
+    # -- maintenance ------------------------------------------------------
+    def test_rename_updates_the_sidecar_and_the_rules_together(self):
+        r = self.imported()
+        tpl = Template(r["folder"])
+        old = [b["id"] for b in r["blocks"]][0]
+        tpl.rename_block(old, "cover")
+        self.assertIn("cover", Template(r["folder"]).block_map.values())
+        rules = json.load(open(tpl.rules_path, encoding="utf-8"))
+        self.assertIn("cover", rules["baseline"])
+        self.assertNotIn(old, rules["baseline"])
+        with Template(r["folder"]).open_library() as lib:
+            self.assertEqual(lib.block("cover").source, "map")
+
+    def test_rename_refuses_a_taken_id(self):
+        tpl = Template(self.imported()["folder"])
+        ids = list(tpl.block_map.values())
+        with self.assertRaises(TemplateError):
+            tpl.rename_block(ids[0], ids[1])
+
+    def test_drift_is_reported_when_a_slide_is_retitled(self):
+        r = self.imported()
+        tpl = Template(r["folder"])
+        raw = tpl.raw_block_map
+        part = sorted(raw)[0]
+        raw[part] = dict(raw[part], title="Something else entirely")
+        tpl.write_block_map(raw)
+        with Template(r["folder"]).open_library() as lib:
+            drift = lib.map_drift()
+        self.assertTrue(any("title was" in d for d in drift))
+
+    def test_listing_finds_imported_templates(self):
+        self.imported(name="alpha")
+        self.imported(name="beta")
+        self.assertEqual([t.name for t in list_templates(self.root)],
+                         ["alpha", "beta"])
+
+    def test_find_template_by_name_or_path(self):
+        r = self.imported(name="gamma")
+        self.assertEqual(find_template(self.root, "gamma").name, "gamma")
+        self.assertEqual(find_template(self.root, r["folder"]).name, "gamma")
+        with self.assertRaises(TemplateError):
+            find_template(self.root, "nope")
+
+    def test_the_shipped_demo_template_still_loads(self):
+        tpl = Template(DEMO)
+        self.assertEqual(tpl.name, "demo")
+        with tpl.open_library() as lib:
+            self.assertEqual(len(lib.blocks), 9)
+            self.assertTrue(all(b.source == "marker" for b in lib.blocks.values()))
+        report = build_template(tpl, _json("answers.expansion.json"),
+                                self.out("via_template.pptx"))
+        self.assertEqual(report["slides"], 8)
+
+
+# ---------------------------------------------------------------- preview
+class TestSvgPreview(EngineTestCase):
+    """The renderer is an approximation, so these tests check the things that
+    are objectively true — well-formed output, real geometry, nothing invented,
+    and no crash on anything the library can throw at it. Whether it *looks*
+    right is judged from the contact sheet (`build.py preview`), which is what
+    that command exists for."""
+
+    def render(self, block_id, **kw):
+        with Library(LIBRARY) as lib:
+            return svgmod.render_block(lib, block_id, **kw)
+
+    def test_every_block_renders_to_well_formed_svg(self):
+        results = svgmod.render_template(Template(DEMO))
+        self.assertEqual(len(results), 9)
+        for r in results:
+            self.assertIsNone(r.get("error"), "%s: %s" % (r["id"], r.get("error")))
+            xml.parsers.expat.ParserCreate().Parse(r["svg"].encode("utf-8"), True)
+            self.assertIn('viewBox="0 0 12192000 6858000"', r["svg"])
+
+    def test_slide_size_comes_from_the_deck(self):
+        r = self.render("cover")
+        self.assertEqual((r["width"], r["height"]), (12192000, 6858000))
+
+    def test_text_is_rendered_not_dropped(self):
+        r = self.render("about_us")
+        text = "".join(re.findall(r'<tspan[^>]*>(.*?)</tspan>', r["svg"]))
+        self.assertIn("About us", text)
+        self.assertIn("national audit practice", text,
+                      "words must not be split across whitespace-only tspans")
+
+    def test_placeholders_are_tagged_for_highlighting(self):
+        """The UI lights up where values land; the tag has to be in the SVG."""
+        r = self.render("cover")
+        lit = re.findall(r'class="ph"[^>]*>([^<]*)<', r["svg"])
+        self.assertIn("{{ClientName}}", lit)
+        self.assertIn("{{DueDate}}", lit)
+
+    def test_a_split_placeholder_highlights_as_one(self):
+        """`{{City}}` is authored across four runs. Without the same stitching
+        the build path uses, the preview would light up `{{Ci`, `ty`, `}}`."""
+        r = self.render("contacts")
+        self.assertIn("{{City}}", re.findall(r'class="ph"[^>]*>([^<]*)<', r["svg"]))
+
+    def test_block_markers_never_appear_in_a_preview(self):
+        for r in svgmod.render_template(Template(DEMO)):
+            self.assertNotIn("{{block:", r["svg"])
+
+    def test_tables_are_drawn_as_real_cells(self):
+        r = self.render("fees")
+        text = " ".join(re.findall(r'<tspan[^>]*>(.*?)</tspan>', r["svg"]))
+        for cell in ("Phase", "Timing", "Fee", "Q1"):
+            self.assertIn(cell, text)
+        self.assertGreaterEqual(r["svg"].count("<rect"), 15, "one rect per cell")
+
+    def test_theme_colours_resolve_through_the_colour_map(self):
+        """`schemeClr val="bg1"` goes through the master's clrMap before the
+        theme. Getting that wrong swaps foreground and background."""
+        theme = svgmod.Theme(None, {"bg1": "lt1", "tx1": "dk1"})
+        self.assertEqual(theme.resolve("bg1"), "FFFFFF")
+        self.assertEqual(theme.resolve("tx1"), "000000")
+
+    def test_colour_modifiers_are_applied(self):
+        el = ET.fromstring(
+            '<solidFill xmlns="%s"><srgbClr val="FF0000"><alpha val="50000"/>'
+            '</srgbClr></solidFill>' % svgmod.A)
+        colour, alpha = svgmod._colour_from(el, svgmod.Theme())
+        self.assertEqual(colour, "#FF0000")
+        self.assertAlmostEqual(alpha, 0.5, places=3)
+
+    def test_markup_in_slide_text_is_escaped(self):
+        """A slide reading '<b> & co' must not produce broken SVG."""
+        r = self.render("fees")
+        self.assertIn("&amp;", r["svg"])
+        xml.parsers.expat.ParserCreate().Parse(r["svg"].encode("utf-8"), True)
+
+    def test_an_unrenderable_slide_does_not_break_the_set(self):
+        """render_template must return something for every block, always —
+        the console shows a broken slide, it does not fail to load."""
+        original = svgmod.render_slide
+        try:
+            def boom(lib, part, **kw):
+                if part.endswith("slide3.xml"):
+                    raise ValueError("simulated failure")
+                return original(lib, part, **kw)
+            svgmod.render_slide = boom
+            results = svgmod.render_template(Template(DEMO))
+        finally:
+            svgmod.render_slide = original
+        self.assertEqual(len(results), 9)
+        broken = [r for r in results if r.get("error")]
+        self.assertEqual(len(broken), 1)
+        self.assertIsNone(broken[0]["svg"])
+
+    def test_rendering_is_fast_enough_to_be_synchronous(self):
+        """The whole reason for rendering in-process: import stays a normal
+        request instead of a background job."""
+        start = time.time()
+        svgmod.render_template(Template(DEMO))
+        elapsed = time.time() - start
+        self.assertLess(elapsed, 3.0, "9 slides took %.2fs" % elapsed)
+
+    def test_output_is_small(self):
+        results = svgmod.render_template(Template(DEMO))
+        total = sum(len(r["svg"]) for r in results)
+        self.assertLess(total, 400_000, "%d bytes for 9 slides" % total)
+
+    def test_the_text_card_fallback_reports_what_is_there(self):
+        with Library(LIBRARY) as lib:
+            card = svgmod.block_card(lib, "fees")
+        self.assertEqual(card["tables"], 1)
+        self.assertIn("Proposed fees", card["text"])
+        self.assertIn("FeeTotal", card["placeholders"])
+        self.assertNotIn("{{block:fees}}", " ".join(card["text"]))
+
+    def test_an_unmarked_deck_renders_too(self):
+        """Imported firm templates have no markers; preview must still work."""
+        fixture = os.path.join(HERE, "fixtures", "office_template.pptx")
+        if not os.path.exists(fixture):
+            os.makedirs(os.path.dirname(fixture), exist_ok=True)
+            sys.path.insert(0, os.path.join(ROOT, "tools"))
+            import make_demo_library as mk
+            was, mk.MARKERS = mk.MARKERS, False
+            try:
+                mk.write_library(fixture)
+            finally:
+                mk.MARKERS = was
+        with Library(fixture) as lib:
+            r = svgmod.render_block(lib, "about_us")
+        xml.parsers.expat.ParserCreate().Parse(r["svg"].encode("utf-8"), True)
+        self.assertIn("About us", "".join(
+            re.findall(r'<tspan[^>]*>(.*?)</tspan>', r["svg"])))
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

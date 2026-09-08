@@ -1,0 +1,17 @@
+# build output — regenerate with `build.py make` / `build.py preview`
+out/*.pptx
+out/*.html
+
+# test scaffolding, regenerated on demand by the suite
+tests/fixtures/*.pptx
+
+# templates/demo/library.pptx IS committed: it is synthetic, non-confidential,
+# and the worked example the docs and tests refer to. REAL firm templates
+# imported here are confidential — keep them out of the repo:
+templates/*/library.pptx
+!templates/demo/library.pptx
+templates/*/*.pptx
+!templates/demo/*.pptx
+
+__pycache__/
+*.pyc

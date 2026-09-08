@@ -1,0 +1,298 @@
+#!/usr/bin/env python3
+"""Build proposal decks from owned templates.
+
+    python build.py import  <deck.pptx> --name office     # add a template
+    python build.py list                                  # what's registered
+    python build.py inspect office                        # blocks, ids, rules check
+    python build.py rename  office slide_7 executive_summary
+    python build.py preview office --out out/sheet.html    # slide images (built in)
+    python build.py make    office --answers a.json --out out/deck.pptx
+
+Adding a template is a file operation — drop a folder under templates/, or run
+`import`. No code changes, ever.
+
+Every build is validated before it is reported as done (decision D5): a deck
+that does not pass never reaches a user.
+"""
+import argparse
+import importlib.util
+import json
+import os
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+
+from engine import (Template, TemplateError, build_template,  # noqa: E402
+                    find_template, import_deck, list_templates)
+from engine import svg as svgmod                               # noqa: E402
+from engine.assemble import AssemblyError                     # noqa: E402
+from engine.library import LibraryError                       # noqa: E402
+from engine.rules import Rules, RulesError                    # noqa: E402
+
+TEMPLATES = os.path.join(HERE, "templates")
+
+
+def load_validator():
+    """v1's `validate_pptx.py`, imported from the parent project.
+
+    Kept as the single copy on purpose (v1-learnings §4: "keep as-is") — one
+    validator, one definition of "will PowerPoint open this".
+    """
+    path = os.path.join(os.path.dirname(HERE), "validate_pptx.py")
+    if not os.path.exists(path):
+        return None
+    spec = importlib.util.spec_from_file_location("validate_pptx", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def read_json(path):
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def resolve(args):
+    root = args.templates or TEMPLATES
+    return find_template(root, args.template)
+
+
+# ---------------------------------------------------------------- list
+def cmd_list(args):
+    templates = list_templates(args.templates or TEMPLATES)
+    if not templates:
+        print("No templates in %s\n\nAdd one:\n  python build.py import "
+              "<your-deck.pptx> --name <name>" % (args.templates or TEMPLATES))
+        return 0
+    print("%-16s %-8s %-8s %s" % ("TEMPLATE", "BLOCKS", "UNNAMED", "DESCRIPTION"))
+    for t in templates:
+        d = t.describe()
+        if "error" in d:
+            print("%-16s %s" % (d["name"], "! " + d["error"]))
+            continue
+        print("%-16s %-8d %-8s %s"
+              % (d["name"], d["blocks"], d["unnamed"] or "-",
+                 d["description"] or ""))
+        if d["answer_sets"]:
+            print("%-16s   answers: %s" % ("", ", ".join(d["answer_sets"])))
+    return 0
+
+
+# ---------------------------------------------------------------- import
+def cmd_import(args):
+    report = import_deck(args.deck, args.templates or TEMPLATES, name=args.name,
+                         description=args.description or "",
+                         overwrite=args.overwrite)
+    print("Imported %s as template %r" % (os.path.basename(args.deck), report["name"]))
+    print("  %s" % report["folder"])
+    print("  %d slides -> %d blocks (%d from markers, %d from slide titles, "
+          "%d positional)"
+          % (report["slides"], report["slides"], report["ids_from_markers"],
+             report["ids_from_titles"], report["ids_from_position"]))
+    if report["placeholders"]:
+        print("  placeholders found: %s"
+              % ", ".join("{{%s}}" % p for p in report["placeholders"]))
+    else:
+        print("  no {{placeholders}} in the deck yet — add them in PowerPoint "
+              "where values belong")
+
+    print("\nWrote a starter rules.json: every slide, in the deck's own order.")
+    print("It builds as-is. Next:")
+    print("  1. python build.py inspect %s        # check the block ids read well"
+          % report["name"])
+    print("  2. edit %s" % os.path.join(report["folder"], "blocks.json"))
+    print("     (or: python build.py rename %s <old> <new>)" % report["name"])
+    print("  3. edit %s" % os.path.join(report["folder"], "rules.json"))
+    print("     move optional blocks out of `baseline` and give them a `when`")
+    return 0
+
+
+# ---------------------------------------------------------------- inspect
+def cmd_inspect(args):
+    tpl = resolve(args)
+    with tpl.open_library() as lib:
+        print("Template: %s" % tpl.name)
+        print("Library:  %s (%d blocks)\n"
+              % (os.path.basename(tpl.library_path), len(lib.blocks)))
+        rows = lib.summary()
+        width = max([len(b["id"]) for b in rows] + [8])
+        fmt = "  %-2s %-" + str(width) + "s %-8s %s"
+        print(fmt % ("", "BLOCK ID", "FROM", "PLACEHOLDERS"))
+        for b in rows:
+            flag = " " if b["marked"] else "?"
+            print(fmt % (flag, b["id"], b["source"],
+                         ", ".join("{{%s}}" % p for p in b["placeholders"]) or "-"))
+
+        loose = [b for b in lib.summary() if not b["marked"]]
+        if loose:
+            print("\n  ? %d block(s) have no stable id — they are named by slide "
+                  "title or position," % len(loose))
+            print("    so reordering the deck renames them. Fix with "
+                  "`rename`, or add a {{block:id}} marker.")
+
+        for line in lib.map_drift():
+            print("  ! %s" % line)
+
+        if not os.path.exists(tpl.rules_path):
+            print("\nNo rules.json yet.")
+            return 0
+
+        rules = Rules.load(tpl.rules_path)
+        problems = rules.check_against(lib)
+        bound = {p.strip("{} ") for p in rules.placeholders}
+        missing = sorted(lib.all_placeholders() - bound)
+        unused = sorted(bound - lib.all_placeholders())
+        print("\nRules: %s" % os.path.basename(tpl.rules_path))
+        for p in problems:
+            print("  ! %s" % p)
+        if missing:
+            print("  ! in the library but not bound: %s"
+                  % ", ".join("{{%s}}" % m for m in missing))
+        if unused:
+            print("  - bound but not used by any slide: %s"
+                  % ", ".join("{{%s}}" % m for m in unused))
+        if not (problems or missing):
+            print("  OK - every referenced block exists and every placeholder "
+                  "is bound")
+    return 0
+
+
+# ---------------------------------------------------------------- rename
+def cmd_rename(args):
+    tpl = resolve(args)
+    part = tpl.rename_block(args.old, args.new)
+    print("Renamed %s -> %s (%s); rules.json updated" % (args.old, args.new, part))
+    return 0
+
+
+# ---------------------------------------------------------------- preview
+def cmd_preview(args):
+    """Render every block to SVG, as a contact sheet you can look at.
+
+    Thumbnails are the one thing no test can sign off — a slide can be
+    structurally perfect and still look wrong — so the output is a page for a
+    human. Rendering is in-process: nothing to install.
+    """
+    sys.path.insert(0, os.path.join(HERE, "tools"))
+    from make_contact_sheet import build_page
+
+    tpl = resolve(args)
+    results = svgmod.render_template(tpl, block_ids=args.blocks or None)
+    out = args.out or os.path.join(HERE, "out", "%s_contact_sheet.html" % tpl.name)
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+    with open(out, "w", encoding="utf-8") as fh:
+        fh.write(build_page(tpl, results))
+
+    failed = [r for r in results if r.get("error")]
+    unsupported = sorted({u for r in results for u in (r.get("unsupported") or [])})
+    print("Wrote %s - %d block(s)" % (out, len(results)))
+    if unsupported:
+        print("  drawn as labelled boxes (not renderable): %s"
+              % ", ".join(unsupported))
+    for r in failed:
+        print("  ! %s did not render: %s" % (r["id"], r["error"]))
+    return 1 if failed else 0
+
+
+# ---------------------------------------------------------------- make
+def cmd_make(args):
+    tpl = resolve(args)
+    answers_path = args.answers
+    if not answers_path:
+        sets = tpl.answer_sets()
+        if len(sets) != 1:
+            raise TemplateError(
+                "--answers is required (template %r has %s)"
+                % (tpl.name, ", ".join(sets) if sets else "no answers*.json"))
+        answers_path = os.path.join(tpl.folder, sets[0])
+        print("Using %s" % sets[0])
+
+    out = args.out or os.path.join(
+        HERE, "out", "%s_%s.pptx"
+        % (tpl.name, os.path.splitext(os.path.basename(answers_path))[0]))
+
+    report = build_template(tpl, read_json(answers_path), out, strict=args.strict)
+
+    print("Built %s - %d slides" % (report["out"], report["slides"]))
+    if args.verbose:
+        for line in report["trace"]:
+            print("  rule: %s" % line)
+        for i, s in enumerate(report["order"], 1):
+            print("  %2d. %-26s (%s)" % (i, s["block"], s["source"]))
+    if report["unresolved_bindings"]:
+        print("  ! unresolved bindings (data sources not wired yet):")
+        for u in report["unresolved_bindings"]:
+            print("      %s" % u)
+    if report["unfilled_placeholders"]:
+        print("  ! left on the slides unfilled: %s"
+              % ", ".join("{{%s}}" % p for p in report["unfilled_placeholders"]))
+
+    validator = load_validator()
+    if validator is None:
+        print("  ! validate_pptx.py not found - output NOT validated")
+        return 0
+    issues = validator.validate(report["out"])
+    if issues:
+        print("  FAILED validation - %d issue(s):" % len(issues))
+        for kind, where, detail in issues[:20]:
+            print("      [%s] %s: %s" % (kind, where, detail))
+        return 1
+    print("  validated OK - no repair dialog expected")
+    return 0
+
+
+# ---------------------------------------------------------------- cli
+def main(argv=None):
+    p = argparse.ArgumentParser(
+        prog="build.py", description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--templates", help="template root (default: ./templates)")
+    sub = p.add_subparsers(dest="cmd")
+
+    sub.add_parser("list", help="list registered templates")
+
+    imp = sub.add_parser("import", help="turn a .pptx into a template folder")
+    imp.add_argument("deck")
+    imp.add_argument("--name", help="template id (default: from the file name)")
+    imp.add_argument("--description")
+    imp.add_argument("--overwrite", action="store_true")
+
+    ins = sub.add_parser("inspect", help="blocks, ids, and a rules check")
+    ins.add_argument("template")
+
+    ren = sub.add_parser("rename", help="rename a block, updating rules.json")
+    ren.add_argument("template")
+    ren.add_argument("old")
+    ren.add_argument("new")
+
+    pv = sub.add_parser("preview", help="render blocks to an SVG contact sheet")
+    pv.add_argument("template")
+    pv.add_argument("--out", help="output .html")
+    pv.add_argument("--blocks", nargs="*", help="only these blocks")
+
+    mk = sub.add_parser("make", help="build a deck")
+    mk.add_argument("template")
+    mk.add_argument("--answers")
+    mk.add_argument("--out")
+    mk.add_argument("--strict", action="store_true",
+                    help="fail if any placeholder is left unfilled")
+    mk.add_argument("-v", "--verbose", action="store_true")
+
+    args = p.parse_args(argv)
+    if not args.cmd:
+        p.print_help()
+        return 0
+
+    handler = {"list": cmd_list, "import": cmd_import, "inspect": cmd_inspect,
+               "rename": cmd_rename, "make": cmd_make,
+               "preview": cmd_preview}[args.cmd]
+    try:
+        return handler(args)
+    except (AssemblyError, RulesError, LibraryError, TemplateError) as exc:
+        print("%s failed: %s" % (args.cmd, exc), file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
