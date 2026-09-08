@@ -299,9 +299,24 @@ def _check_provenance(rep, template, keep):
                 "copies of the same slide. Check for near-duplicate blocks.")
 
     total = data.get("deck_count") or 0
-    if total:
+    if total and blocks:
         singletons = [b for b, i in blocks.items() if i.get("deck_count") == 1]
-        if len(singletons) > max(3, total // 2):
+        share = len(singletons) / float(len(blocks))
+        if total > 3 and share > 0.9:
+            # Decks from one template share most of their slides. If almost
+            # every block came from exactly one deck, nothing matched across
+            # them - the merge did not merge, and the library is every deck
+            # stacked end to end rather than a template.
+            rep.add(ERROR, "merge-did-not-merge",
+                    "%d of %d blocks came from exactly one deck - the decks did "
+                    "not de-duplicate" % (len(singletons), len(blocks)),
+                    "Decks generated from one template share most of their "
+                    "slides, so this means no two decks' copies of a slide were "
+                    "recognised as the same slide. The library is the decks "
+                    "stacked end to end, not a template.\n\n"
+                    "Run `python tools/build_master_deck.py <decks> --probe` to "
+                    "see how slides are being identified and why.")
+        elif len(singletons) > max(3, total // 2):
             rep.add(NOTE, "many-singletons",
                     "%d block(s) appeared in only one deck" % len(singletons),
                     "Expected if each payload turns on its own section; worth a "

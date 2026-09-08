@@ -1007,6 +1007,44 @@ class TestReport(EngineTestCase):
                      if f.code == "no-placeholders")
         self.assertIn("--tokenise", error.detail)
 
+    def test_a_merge_that_did_not_merge_is_an_error(self):
+        """The real 70-deck run filed this as a note at the bottom, under the
+        one finding that mattered. It is the loudest signal there is."""
+        folder = os.path.join(self.tmp, "nomerge")
+        shutil.copytree(DEMO, folder, ignore=shutil.ignore_patterns("report.md"))
+        with open(os.path.join(folder, "provenance.json"), "w") as fh:
+            json.dump({"deck_count": 70,
+                       "blocks": {"b%d" % i: {"deck_count": 1} for i in range(500)}},
+                      fh)
+        rep = self.report(Template(folder), sample=False)
+        self.assertIn("merge-did-not-merge",
+                      [f.code for f in rep.of(reportmod.ERROR)])
+
+    def test_a_healthy_merge_is_not_flagged(self):
+        folder = os.path.join(self.tmp, "goodmerge")
+        shutil.copytree(DEMO, folder, ignore=shutil.ignore_patterns("report.md"))
+        with open(os.path.join(folder, "provenance.json"), "w") as fh:
+            json.dump({"deck_count": 70,
+                       "blocks": {"b%d" % i: {"deck_count": 40}
+                                  for i in range(120)}}, fh)
+        rep = self.report(Template(folder), sample=False)
+        self.assertNotIn("merge-did-not-merge",
+                         [f.code for f in rep.of(reportmod.ERROR)])
+
+    def test_repeated_findings_are_grouped(self):
+        """136 copies of one sentence made the real report unreadable - it had
+        to be trimmed by hand before it could be sent."""
+        rep = reportmod.Report(Template(DEMO))
+        for i in range(136):
+            rep.add(reportmod.WARNING, "sidecar-drift",
+                    "slide%d.xml changed" % i, "detail")
+        doc = reportmod.to_markdown(rep, include_blocks=False)
+        self.assertIn("## Warnings (136)", doc)
+        self.assertEqual(sum(1 for l in doc.splitlines()
+                             if l.startswith("### ")), 1)
+        self.assertIn("136 occurrences", doc)
+        self.assertIn("and 121 more", doc)
+
     def test_unstable_ids_are_warned_about(self):
         folder = os.path.join(self.tmp, "loose")
         os.makedirs(folder)
