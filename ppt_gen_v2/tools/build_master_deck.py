@@ -51,8 +51,7 @@ except ImportError:                                           # pragma: no cover
 
 # Parts we never carry into the library: speaker notes (they back-reference a
 # slide), Templafy's customer-data tags, and comments.
-_DROP_REL = ("notesSlide", "/tags", "comments", "notesMaster")
-_PRESENTATION_EXTRAS = ("presProps", "viewProps", "tableStyles")
+_DROP_REL = ("notesSlide", "/tags", "comments")
 
 
 # ---------------------------------------------------------------- identity
@@ -119,7 +118,15 @@ class MasterBuilder:
         self.media_ext = set()
 
     def _next(self, kind, ext="xml"):
-        self.counters[kind] = self.counters.get(kind, 0) + 1
+        # Verbatim copies keep their original names, so a generated name can
+        # collide with one (ppt/theme/theme1.xml). Skip anything already taken.
+        while True:
+            self.counters[kind] = self.counters.get(kind, 0) + 1
+            candidate = self._name_for(kind, ext)
+            if candidate not in self.parts:
+                return candidate
+
+    def _name_for(self, kind, ext):
         folder = {"slide": "ppt/slides/slide", "layout": "ppt/slideLayouts/slideLayout",
                   "master": "ppt/slideMasters/slideMaster", "theme": "ppt/theme/theme",
                   "media": "ppt/media/media", "chart": "ppt/charts/chart",
@@ -156,6 +163,20 @@ class MasterBuilder:
         self.add(name, data, ctype)
         return name, True
 
+
+# Content types for the parts a deck can drag in that are not images: chart
+# workbooks, OLE objects, embedded fonts. A part with no content type at all
+# makes the package invalid.
+_FALLBACK_CT = {
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "xls": "application/vnd.ms-excel",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "doc": "application/msword",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "bin": "application/vnd.openxmlformats-officedocument.oleObject",
+    "fntdata": "application/x-fontdata",
+    "vml": "application/vnd.openxmlformats-officedocument.vmlDrawing",
+}
 
 _VOLATILE = [
     re.compile(rb'<[a-zA-Z0-9]+:creationId[^>]*/>'),
@@ -200,6 +221,7 @@ class Merger:
         self.base_presentation = None
         self.base_ct = ""
         self.masters = []          # output master parts, in order added
+        self.kept_prs_rels = []    # presentation rels carried over untouched
 
     # -- closure ------------------------------------------------------
     def _import_closure(self, lib, part, kind_of):
@@ -319,6 +341,68 @@ class Merger:
         return name, layout_out
 
     # -- the merge ----------------------------------------------------
+    def _copy_verbatim(self, lib, part, seen=None):
+        """Copy a part and everything it needs, keeping the original names.
+
+        Used for the presentation's own attachments — embedded fonts, the
+        handout and notes masters, presProps and friends. They are referenced
+        from presentation.xml by relationship ids we do not rewrite, so the
+        safest thing is to leave part names and ids exactly as they were.
+        """
+        seen = seen if seen is not None else set()
+        if part in seen or part not in lib.names:
+            return
+        seen.add(part)
+        self.out.add(part, lib.read_bytes(part),
+                     ooxml.ctype_for(lib.content_types, part)
+                     or ooxml.infer_ctype(part))
+        rels_part = ooxml.rels_part_for(part)
+        if rels_part not in lib.names:
+            return
+        entries = []
+        for tag in ooxml.rel_tags(lib.read(rels_part)):
+            rid = ooxml.rel_attr(tag, "Id")
+            rtype = ooxml.rel_attr(tag, "Type") or ""
+            target = ooxml.rel_attr(tag, "Target") or ""
+            if 'TargetMode="External"' in tag:
+                entries.append((rid, rtype, target, True))
+                continue
+            dep = ooxml.resolve_part(part, target)
+            if dep not in lib.names:
+                continue
+            self._copy_verbatim(lib, dep, seen)
+            entries.append((rid, rtype, target, False))   # unchanged: same names
+        self.out.add(rels_part, _rebuild_rels(entries), None)
+
+    def _carry_presentation_parts(self, lib):
+        """Keep every presentation relationship that is not a slide or master.
+
+        presentation.xml refers to more than its slides: embedded fonts, a
+        handout master, presProps, custom shows. Templafy writes those ids as
+        GUIDs, and the body of presentation.xml is carried over as-is, so
+        rebuilding the .rels from scratch left eight of those ids pointing at
+        nothing — which is what stopped PowerPoint reading the file.
+
+        Slides and masters are re-numbered by the merge, so those get fresh
+        ids; everything else keeps its id, its target and its part name.
+        """
+        for tag in ooxml.rel_tags(lib.presentation_rels):
+            rid = ooxml.rel_attr(tag, "Id")
+            rtype = ooxml.rel_attr(tag, "Type") or ""
+            target = ooxml.rel_attr(tag, "Target") or ""
+            if not rid:
+                continue
+            if rtype.endswith("/slide") or rtype.endswith("/slideMaster"):
+                continue                       # re-created by the merge
+            if 'TargetMode="External"' in tag:
+                self.kept_prs_rels.append((rid, rtype, target, True))
+                continue
+            dep = ooxml.resolve_part("ppt/presentation.xml", target)
+            if dep not in lib.names:
+                continue
+            self._copy_verbatim(lib, dep)
+            self.kept_prs_rels.append((rid, rtype, target, False))
+
     def add_deck(self, path, label=None):
         """Fold one deck in. -> [(identity, is_new, block_title)]"""
         label = label or os.path.splitext(os.path.basename(path))[0]
@@ -328,12 +412,7 @@ class Merger:
             if self.base_presentation is None:
                 self.base_presentation = lib.presentation
                 self.base_ct = lib.content_types
-                for extra in _PRESENTATION_EXTRAS:
-                    for cand in lib.names:
-                        if extra.lower() in cand.lower() and cand.endswith(".xml"):
-                            self.out.add(cand, lib.read_bytes(cand),
-                                         ooxml.ctype_for(lib.content_types, cand))
-                            break
+                self._carry_presentation_parts(lib)
             for part in lib.slide_parts:
                 raw = lib.read_bytes(part)
                 identity, how = slide_identity(raw, self.id_notes)
@@ -360,8 +439,8 @@ class Merger:
         if not slides:
             raise SystemExit("no slides found in any deck")
 
-        minter = ooxml.RelIdMinter()
-        prs_entries, sld_ids = [], []
+        minter = ooxml.RelIdMinter(rid for rid, _t, _g, _e in self.kept_prs_rels)
+        prs_entries, sld_ids = list(self.kept_prs_rels), []
         base = ("http://schemas.openxmlformats.org/officeDocument/2006/"
                 "relationships/")
         for master in self.masters:
@@ -374,13 +453,6 @@ class Merger:
             rid = minter.mint()
             prs_entries.append((rid, base + "slide", _abs_target(slide), False))
             sld_ids.append('<p:sldId id="%d" r:id="%s"/>' % (256 + n, rid))
-        for extra in _PRESENTATION_EXTRAS:
-            for part in self.out.parts:
-                if extra.lower() in part.lower():
-                    prs_entries.append((minter.mint(), base + extra,
-                                        _abs_target(part), False))
-                    break
-
         prs = self.base_presentation
         prs = re.sub(r'<p:notesMasterIdLst\b.*?</p:notesMasterIdLst>', '', prs,
                      flags=re.DOTALL)
@@ -424,6 +496,21 @@ class Merger:
             if resolved:
                 ct.append('<Override PartName="/%s" ContentType="%s"/>'
                           % (part, resolved))
+        # Guarantee, not hope: every part must resolve to a content type via an
+        # Override or a Default, or the package is invalid. Anything still
+        # uncovered gets a Default for its extension.
+        declared = set(re.findall(r'PartName="/([^"]+)"', "".join(ct)))
+        defaulted = set(re.findall(r'Extension="([^"]+)"', "".join(ct)))
+        for part in sorted(self.out.parts):
+            if part in declared:
+                continue
+            base = os.path.basename(part)
+            ext = base.rsplit(".", 1)[1].lower() if "." in base else ""
+            if not ext or ext in defaulted:
+                continue
+            ct.append('<Default Extension="%s" ContentType="%s"/>'
+                      % (ext, _FALLBACK_CT.get(ext, "application/octet-stream")))
+            defaulted.add(ext)
         ct.append('</Types>')
 
         root_rels = _rebuild_rels([

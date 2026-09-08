@@ -797,6 +797,124 @@ class TestMasterMerge(EngineTestCase):
         self.assertTrue(src_text <= out_text,
                         "every slide of the source deck survives the merge")
 
+    # -- the shape of a real Templafy deck --------------------------------
+    def _templafy_ify(self, src, dst, rid="Rf2b6b82092c644ea"):
+        """Make a deck look like Templafy's output in the two ways that broke us.
+
+        A GUID-style relationship id on a presentation-level attachment that is
+        neither a slide nor a master (an embedded font), and a binary part
+        hanging off a slide (what a chart's workbook is). Neither exists in the
+        synthetic library, which is why 100 tests passed while PowerPoint
+        refused to open the real merge.
+        """
+        z = zipfile.ZipFile(src)
+        rels = z.read("ppt/_rels/presentation.xml.rels").decode()
+        prs = z.read("ppt/presentation.xml").decode()
+        rels = rels.replace("</Relationships>",
+                            '<Relationship Id="%s" Type="http://schemas.'
+                            'openxmlformats.org/officeDocument/2006/'
+                            'relationships/font" Target="fonts/font1.fntdata"/>'
+                            "</Relationships>" % rid)
+        prs = prs.replace("<p:sldSz",
+                          '<p:embeddedFontLst><p:embeddedFont>'
+                          '<p:font typeface="Arial"/><p:regular r:id="%s"/>'
+                          '</p:embeddedFont></p:embeddedFontLst><p:sldSz' % rid)
+        with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as out:
+            for info in z.infolist():
+                name = info.filename
+                if name == "ppt/_rels/presentation.xml.rels":
+                    out.writestr(name, rels)
+                elif name == "ppt/presentation.xml":
+                    out.writestr(name, prs)
+                elif name == "[Content_Types].xml":
+                    out.writestr(name, z.read(name).decode().replace(
+                        "</Types>", '<Default Extension="fntdata" '
+                        'ContentType="application/x-fontdata"/>'
+                        '<Default Extension="xlsx" ContentType="application/'
+                        'vnd.openxmlformats-officedocument.spreadsheetml.sheet"'
+                        '/></Types>'))
+                elif name == "ppt/slides/_rels/slide1.xml.rels":
+                    out.writestr(name, z.read(name).decode().replace(
+                        "</Relationships>",
+                        '<Relationship Id="rIdOle" Type="http://schemas.'
+                        'openxmlformats.org/officeDocument/2006/relationships/'
+                        'oleObject" Target="../embeddings/book.xlsx"/>'
+                        "</Relationships>"))
+                elif name == "ppt/slides/slide1.xml":
+                    # the slide must actually reference it - an unreferenced
+                    # rel is dropped, and rightly so
+                    out.writestr(name, z.read(name).decode().replace(
+                        "</p:spTree>",
+                        '<p:graphicFrame><p:nvGraphicFramePr>'
+                        '<p:cNvPr id="99" name="Embedded book"/>'
+                        '<p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>'
+                        '<p:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/>'
+                        '</p:xfrm><a:graphic><a:graphicData uri="http://schemas.'
+                        'openxmlformats.org/presentationml/2006/ole">'
+                        '<p:oleObj spid="_x0000_s1026" r:id="rIdOle" imgW="100" '
+                        'imgH="100" progId="Excel.Sheet.12"><p:embed/></p:oleObj>'
+                        '</a:graphicData></a:graphic></p:graphicFrame>'
+                        "</p:spTree>"))
+                else:
+                    out.writestr(info, z.read(name))
+            out.writestr("ppt/fonts/font1.fntdata", b"\x00FONTDATA")
+            out.writestr("ppt/embeddings/book.xlsx", b"PK\x03\x04binary-not-xml")
+        z.close()
+
+    def _templafy_decks(self):
+        folder = os.path.join(self.work, "tdecks")
+        os.makedirs(folder, exist_ok=True)
+        for name in self.cases:
+            self._templafy_ify(os.path.join(self.decks, name + ".pptx"),
+                               os.path.join(folder, name + ".pptx"))
+        return folder
+
+    def test_a_templafy_shaped_merge_validates(self):
+        """The real 70-deck merge produced a library PowerPoint would not open:
+        binary parts renamed to .xml, and eight GUID relationship ids in
+        presentation.xml left pointing at nothing."""
+        decks = self._templafy_decks()
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = self.bmd.main([decks, "--payloads", self.pays, "--templates",
+                                  self.roots, "--name", "tf", "--overwrite"])
+        self.assertEqual(code, 0, buffer.getvalue())
+        from engine import validate as validator
+        library = os.path.join(self.roots, "tf", "library.pptx")
+        self.assertEqual(validator.validate(library), [])
+
+    def test_presentation_relationships_all_resolve(self):
+        """Every r:id presentation.xml uses must exist in its .rels. This is
+        the check that would have caught the deck PowerPoint refused."""
+        decks = self._templafy_decks()
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.bmd.main([decks, "--payloads", self.pays, "--templates",
+                           self.roots, "--name", "tf2", "--overwrite"])
+        z = zipfile.ZipFile(os.path.join(self.roots, "tf2", "library.pptx"))
+        prs = z.read("ppt/presentation.xml").decode()
+        rels = z.read("ppt/_rels/presentation.xml.rels").decode()
+        used = set(re.findall(r'r:id="([^"]+)"', prs))
+        have = set(re.findall(r'Id="([^"]+)"', rels))
+        self.assertEqual(used - have, set())
+        self.assertIn("Rf2b6b82092c644ea", have, "the GUID id must be kept")
+        self.assertIn("ppt/fonts/font1.fntdata", z.namelist(),
+                      "its target must be carried too")
+
+    def test_binary_dependencies_keep_their_extension(self):
+        """A chart's embedded workbook written as .xml is binary in a part
+        declared as XML - PowerPoint stops reading the file."""
+        decks = self._templafy_decks()
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.bmd.main([decks, "--payloads", self.pays, "--templates",
+                           self.roots, "--name", "tf3", "--overwrite"])
+        z = zipfile.ZipFile(os.path.join(self.roots, "tf3", "library.pptx"))
+        for name in z.namelist():
+            if name.endswith(".xml"):
+                self.assertFalse(z.read(name).startswith(b"PK\x03\x04"),
+                                 "%s is a zip archive named .xml" % name)
+        self.assertTrue(any(n.endswith(".xlsx") for n in z.namelist()),
+                        "the workbook should keep its real extension")
+
     # -- rule proposal ----------------------------------------------------
     def test_the_controlling_answer_is_identified(self):
         """The whole point of pairing decks with payloads: work out *why* a
