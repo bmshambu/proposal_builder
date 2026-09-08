@@ -6,6 +6,7 @@
     python build.py inspect office                        # blocks, ids, rules check
     python build.py rename  office slide_7 executive_summary
     python build.py preview office --out out/sheet.html    # slide images (built in)
+    python build.py check   office                        # write report.md
     python build.py make    office --answers a.json --out out/deck.pptx
 
 Adding a template is a file operation — drop a folder under templates/, or run
@@ -25,6 +26,7 @@ sys.path.insert(0, HERE)
 
 from engine import (Template, TemplateError, build_template,  # noqa: E402
                     find_template, import_deck, list_templates)
+from engine import report as reportmod                         # noqa: E402
 from engine import svg as svgmod                               # noqa: E402
 from engine.assemble import AssemblyError                     # noqa: E402
 from engine.library import LibraryError                       # noqa: E402
@@ -166,6 +168,39 @@ def cmd_rename(args):
     return 0
 
 
+# ---------------------------------------------------------------- check
+def cmd_check(args):
+    """Inspect a template and write report.md.
+
+    Exists because templates live on machines we cannot see, holding decks
+    nobody outside the firm may look at. When something is wrong, the thing to
+    hand over is a description of the problem, not the deck.
+    """
+    tpl = resolve(args)
+    answers = read_json(args.answers) if args.answers else None
+    rep = reportmod.check(tpl, answers=answers, redact=args.redact,
+                          validator=load_validator(), sample=not args.no_build)
+
+    out = args.out or os.path.join(tpl.folder, "report.md")
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+    with open(out, "w", encoding="utf-8") as fh:
+        fh.write(reportmod.to_markdown(rep, include_blocks=not args.brief))
+
+    errors, warnings = rep.of(reportmod.ERROR), rep.of(reportmod.WARNING)
+    print("Wrote %s" % out)
+    print("  %d error(s), %d warning(s), %d note(s)"
+          % (len(errors), len(warnings), len(rep.of(reportmod.NOTE))))
+    for finding in (errors + warnings)[:12]:
+        print("  %-8s %s" % (finding.level.upper(), finding.message))
+    if len(errors) + len(warnings) > 12:
+        print("  ... %d more in the report"
+              % (len(errors) + len(warnings) - 12))
+    if not args.redact:
+        print("  Note: the report quotes slide titles. Re-run with --redact "
+              "before sharing it outside the firm.")
+    return 1 if errors else 0
+
+
 # ---------------------------------------------------------------- preview
 def cmd_preview(args):
     """Render every block to SVG, as a contact sheet you can look at.
@@ -271,6 +306,17 @@ def main(argv=None):
     pv.add_argument("--out", help="output .html")
     pv.add_argument("--blocks", nargs="*", help="only these blocks")
 
+    ck = sub.add_parser("check", help="write report.md describing any problems")
+    ck.add_argument("template")
+    ck.add_argument("--out", help="output .md (default: <template>/report.md)")
+    ck.add_argument("--redact", action="store_true",
+                    help="drop slide titles and quoted text, keep every finding")
+    ck.add_argument("--answers", help="answers .json for the test build")
+    ck.add_argument("--no-build", action="store_true",
+                    help="skip the test build")
+    ck.add_argument("--brief", action="store_true",
+                    help="omit the per-block table")
+
     mk = sub.add_parser("make", help="build a deck")
     mk.add_argument("template")
     mk.add_argument("--answers")
@@ -286,7 +332,7 @@ def main(argv=None):
 
     handler = {"list": cmd_list, "import": cmd_import, "inspect": cmd_inspect,
                "rename": cmd_rename, "make": cmd_make,
-               "preview": cmd_preview}[args.cmd]
+               "preview": cmd_preview, "check": cmd_check}[args.cmd]
     try:
         return handler(args)
     except (AssemblyError, RulesError, LibraryError, TemplateError) as exc:

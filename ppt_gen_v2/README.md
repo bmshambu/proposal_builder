@@ -34,6 +34,7 @@ cd ppt_gen_v2
 python build.py list                     # registered templates
 python build.py inspect demo             # blocks, where their ids come from, rules check
 python build.py preview demo             # render every block to an SVG contact sheet
+python build.py check   demo             # write report.md describing any problems
 
 # build two decks from ONE library and two answer sets
 python build.py make demo --answers templates/demo/answers.baseline.json  --out out/northwind.pptx -v
@@ -127,6 +128,30 @@ The two demo builds differ exactly as the rules say they should:
 | `expansion_detail` | absent | inserted after `approach` |
 | `scope` | `scope` | variant `scope_expansion` |
 | `{{ClientName}}` | Northwind Manufacturing plc | Globex International Holdings |
+
+## When something is wrong: `check`
+
+```bash
+python build.py check firm               # writes templates/firm/report.md
+python build.py check firm --redact      # safe to send outside the firm
+```
+
+Opens the library, validates the package, checks the rules against it, renders
+every block, and builds a test deck — then writes what it found to `report.md`,
+worst first, each finding with a stable code (`unbound-placeholder`,
+`unstable-ids`, `no-placeholders`). Exits non-zero if anything is an error, so it
+works in CI too.
+
+It exists because templates live on machines we cannot see, holding decks nobody
+outside the firm may look at: when something breaks, the thing to hand over is a
+description of the problem, not the deck.
+
+**`--redact` makes that safe.** Slide titles and quoted text become `[redacted]`,
+and block ids — which are derived from those titles, so `example_corporation` is
+client-identifying — become `block_01`, `block_02`, consistently throughout,
+including inside the findings' own wording. Every count, code and structural
+finding survives, so the report stays diagnosable. Without the flag, the document
+says at the top that it quotes slide titles.
 
 ## Slide previews, without LibreOffice
 

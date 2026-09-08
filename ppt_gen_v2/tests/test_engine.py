@@ -28,6 +28,7 @@ sys.path.insert(0, ROOT)
 from engine import (Library, Rules, Template, build,          # noqa: E402
                     build_template, find_template, import_deck, list_templates)
 from engine import bindings, placeholders                     # noqa: E402
+from engine import report as reportmod                        # noqa: E402
 from engine import svg as svgmod                              # noqa: E402
 from engine.assemble import AssemblyError                     # noqa: E402
 from engine.library import LibraryError                       # noqa: E402
@@ -916,6 +917,151 @@ class TestMasterMerge(EngineTestCase):
         self.assertEqual(len(actual), len(expected))
         # same slides, same order (text is identical: same answers)
         self.assertEqual(actual, expected)
+
+
+# ---------------------------------------------------------------- check
+class TestReport(EngineTestCase):
+    """`build.py check` is how a problem reaches us from a machine we cannot
+    see, so it has to catch real faults and never leak client text."""
+
+    def report(self, template, **kw):
+        kw.setdefault("validator", _validator())
+        return reportmod.check(template, **kw)
+
+    def test_a_healthy_template_reports_clean(self):
+        rep = self.report(Template(DEMO))
+        self.assertEqual(rep.of(reportmod.ERROR), [])
+        self.assertEqual(rep.of(reportmod.WARNING), [])
+        self.assertTrue(rep.ok)
+
+    def test_codes_are_stable_identifiers(self):
+        """The console and any future UI key off these, not the prose."""
+        rep = self.report(Template(DEMO))
+        for finding in rep.findings:
+            self.assertRegex(finding.code, r'^[a-z][a-z0-9-]+$')
+
+    def test_missing_rules_is_an_error(self):
+        folder = os.path.join(self.tmp, "norules")
+        shutil.copytree(DEMO, folder, ignore=shutil.ignore_patterns(
+            "rules.json", "report.md", ".thumbs"))
+        rep = self.report(Template(folder), sample=False)
+        self.assertIn("no-rules", [f.code for f in rep.of(reportmod.ERROR)])
+
+    def test_an_unbound_placeholder_is_an_error(self):
+        folder = os.path.join(self.tmp, "unbound")
+        shutil.copytree(DEMO, folder, ignore=shutil.ignore_patterns("report.md"))
+        rules = json.load(open(os.path.join(folder, "rules.json"), encoding="utf-8"))
+        rules["placeholders"].pop("{{ClientName}}")
+        json.dump(rules, open(os.path.join(folder, "rules.json"), "w",
+                              encoding="utf-8"))
+        rep = self.report(Template(folder))
+        codes = [f.code for f in rep.of(reportmod.ERROR)]
+        self.assertIn("unbound-placeholder", codes)
+
+    def test_rules_naming_a_missing_block_is_an_error(self):
+        folder = os.path.join(self.tmp, "ghost")
+        shutil.copytree(DEMO, folder, ignore=shutil.ignore_patterns("report.md"))
+        rules = json.load(open(os.path.join(folder, "rules.json"), encoding="utf-8"))
+        rules["baseline"].append("no_such_block")
+        json.dump(rules, open(os.path.join(folder, "rules.json"), "w",
+                              encoding="utf-8"))
+        rep = self.report(Template(folder), sample=False)
+        self.assertIn("rules-mismatch", [f.code for f in rep.of(reportmod.ERROR)])
+
+    def test_a_template_with_no_placeholders_is_flagged(self):
+        """The merge trap: a library built from generated decks substitutes
+        nothing, so every client gets the same deck."""
+        folder = os.path.join(self.tmp, "nophs")
+        shutil.copytree(DEMO, folder, ignore=shutil.ignore_patterns("report.md"))
+        # a library whose slides carry no {{...}} at all
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
+        import make_demo_library as mk
+        original = mk.build_slides
+
+        def plain():
+            # stitch first: the contacts slide authors {{City}} across four
+            # runs, so a regex over the raw XML would miss it and the library
+            # would not actually be placeholder-free
+            return [(bid, re.sub(r'\{\{[A-Za-z0-9_.]+\}\}', 'Acme',
+                                 placeholders.normalise_runs(xml)))
+                    for bid, xml in original()]
+        try:
+            mk.build_slides = plain
+            mk.write_library(os.path.join(folder, "library.pptx"))
+        finally:
+            mk.build_slides = original
+        rules = json.load(open(os.path.join(folder, "rules.json"), encoding="utf-8"))
+        rules["placeholders"] = {}
+        json.dump(rules, open(os.path.join(folder, "rules.json"), "w",
+                              encoding="utf-8"))
+
+        rep = self.report(Template(folder))
+        self.assertIn("no-placeholders",
+                      [f.code for f in rep.of(reportmod.WARNING)])
+
+        # with provenance.json present it is the merge bug, and an error
+        json.dump({"deck_count": 2, "blocks": {}},
+                  open(os.path.join(folder, "provenance.json"), "w"))
+        rep = self.report(Template(folder))
+        error = next(f for f in rep.of(reportmod.ERROR)
+                     if f.code == "no-placeholders")
+        self.assertIn("--tokenise", error.detail)
+
+    def test_unstable_ids_are_warned_about(self):
+        folder = os.path.join(self.tmp, "loose")
+        os.makedirs(folder)
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
+        import make_demo_library as mk
+        was, mk.MARKERS = mk.MARKERS, False
+        try:
+            mk.write_library(os.path.join(folder, "library.pptx"))
+        finally:
+            mk.MARKERS = was
+        rep = self.report(Template(folder), sample=False)
+        self.assertIn("unstable-ids", [f.code for f in rep.of(reportmod.WARNING)])
+
+    def test_a_broken_library_reports_rather_than_crashing(self):
+        folder = os.path.join(self.tmp, "broken")
+        os.makedirs(folder)
+        with zipfile.ZipFile(os.path.join(folder, "library.pptx"), "w") as z:
+            z.writestr("hello.txt", "not a deck")
+        rep = self.report(Template(folder))
+        self.assertIn("library-unreadable",
+                      [f.code for f in rep.of(reportmod.ERROR)])
+
+    # -- the document -----------------------------------------------------
+    def test_markdown_leads_with_the_verdict(self):
+        rep = self.report(Template(DEMO))
+        doc = reportmod.to_markdown(rep)
+        self.assertTrue(doc.startswith("# Template check - demo"))
+        self.assertIn("## Summary", doc)
+        self.assertIn("## Blocks", doc)
+
+    def test_redacted_report_carries_no_slide_text(self):
+        """The promise on the page is that this is safe to send outside the
+        firm, so nothing client-identifying may survive - block ids included,
+        since they are derived from slide titles."""
+        rep = self.report(Template(DEMO), redact=True)
+        doc = reportmod.to_markdown(rep)
+        with Library(LIBRARY) as lib:
+            titles = [b.title for b in lib.ordered() if b.title]
+            ids = [b.id for b in lib.ordered()]
+        for title in titles:
+            self.assertNotIn(title, doc, "slide title leaked")
+        for bid in ids:
+            self.assertNotIn(bid, doc, "block id leaked (derived from a title)")
+        self.assertIn("block_01", doc, "ids must still be referable")
+
+    def test_redaction_keeps_every_finding(self):
+        plain = self.report(Template(DEMO))
+        hidden = self.report(Template(DEMO), redact=True)
+        self.assertEqual([f.code for f in plain.sorted_findings()],
+                         [f.code for f in hidden.sorted_findings()])
+
+    def test_unredacted_report_warns_before_sharing(self):
+        doc = reportmod.to_markdown(self.report(Template(DEMO)))
+        self.assertIn("Before sharing", doc)
+        self.assertIn("--redact", doc)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,11 @@
-# build output — regenerate with `build.py make` / `build.py preview`
+# build output — regenerate with `build.py make` / `build.py preview` / `check`
 out/*.pptx
 out/*.html
+out/*.md
+
+# check reports quote slide titles from a confidential template
+templates/*/report.md
+templates/*/provenance.json
 
 # test scaffolding, regenerated on demand by the suite
 tests/fixtures/*.pptx
