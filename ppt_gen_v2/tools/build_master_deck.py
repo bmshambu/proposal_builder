@@ -122,7 +122,9 @@ class MasterBuilder:
         self.counters[kind] = self.counters.get(kind, 0) + 1
         folder = {"slide": "ppt/slides/slide", "layout": "ppt/slideLayouts/slideLayout",
                   "master": "ppt/slideMasters/slideMaster", "theme": "ppt/theme/theme",
-                  "media": "ppt/media/media", "embed": "ppt/embeddings/object"}[kind]
+                  "media": "ppt/media/media", "chart": "ppt/charts/chart",
+                  "diagram": "ppt/diagrams/data", "notesMaster": "ppt/notesMasters/notesMaster",
+                  "embed": "ppt/embeddings/object"}[kind]
         return "%s%d.%s" % (folder, self.counters[kind], ext)
 
     def add(self, name, data, ctype):
@@ -214,7 +216,12 @@ class Merger:
         data = lib.read_bytes(part)
         kind = kind_of(part)
         ctype = ooxml.ctype_for(lib.content_types, part) or ooxml.infer_ctype(part)
-        name, is_new = self.out.add_deduped(kind, data, ctype)
+        # Keep the real extension. A chart drags in an embedded workbook
+        # (.xlsx) and an OLE object is a .bin; renaming those to .xml gives
+        # PowerPoint a part whose extension, content type and actual bytes all
+        # disagree, and it stops reading the file.
+        ext = os.path.splitext(part)[1].lstrip(".").lower() or "xml"
+        name, is_new = self.out.add_deduped(kind, data, ctype, ext)
         self.layout_map[(lib.path, part)] = name
         if not is_new:
             return name
@@ -252,15 +259,27 @@ class Merger:
 
     # -- slides -------------------------------------------------------
     def _kind_of(self, part):
+        """Which family a part belongs to, so it keeps a sensible home.
+
+        A chart or a SmartArt diagram brings its own little tree (colours,
+        style, an embedded workbook). Filing those under ppt/embeddings/
+        works by luck at best; keep each where PowerPoint expects it.
+        """
         low = part.lower()
         if "/slidelayouts/" in low:
             return "layout"
         if "/slidemasters/" in low:
             return "master"
+        if "/notesmasters/" in low:
+            return "notesMaster"
         if "/theme/" in low:
             return "theme"
         if "/media/" in low:
             return "media"
+        if "/charts/" in low:
+            return "chart"
+        if "/diagrams/" in low:
+            return "diagram"
         return "embed"
 
     def _import_slide(self, lib, part, source_label):
