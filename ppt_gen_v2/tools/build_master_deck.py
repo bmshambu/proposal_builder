@@ -1,0 +1,859 @@
+#!/usr/bin/env python3
+"""Merge many generated decks into one master library deck.
+
+The bridge from v1 to v2. You have ~70 decks that Templafy produced from the
+OFAT payloads; between them they contain every slide the template can emit. This
+collapses them into a single `library.pptx` holding **one copy of each distinct
+slide**, which is exactly the input v2's engine wants.
+
+    python tools/build_master_deck.py data/decks/*.pptx --name firm
+    python tools/build_master_deck.py data/decks --payloads data/payloads --name firm
+
+With `--payloads`, it also works out *why* each slide appeared — which answer
+put it in the deck — and writes that into `rules.json` as a proposal for the
+author to confirm. That is v1's harvesting insight, but producing an editable
+file rather than a black box.
+
+Nothing is inferred about the slides themselves: every one is copied byte for
+byte, with its layout, master, theme and media.
+
+--------------------------------------------------------------------------
+Slide identity
+--------------------------------------------------------------------------
+The same slide appears in many decks with *different text* (client name, date),
+so text cannot be the key. PowerPoint stamps `<a16:creationId>` GUIDs on shapes
+and those survive copying and text edits — v1 proved they match slides across
+decks reliably, so they are the primary key here too. Decks without them fall
+back to a structural signature plus text, which is weaker: see `--report`.
+"""
+import argparse
+import glob
+import hashlib
+import json
+import os
+import re
+import sys
+import zipfile
+
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PARENT = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
+sys.path.insert(0, PARENT)
+
+from engine import ooxml                                      # noqa: E402
+from engine.library import Library, slide_title, slugify      # noqa: E402
+
+try:
+    import pptx_forensics as pf                               # noqa: E402
+except ImportError:                                           # pragma: no cover
+    pf = None
+
+# Parts we never carry into the library: speaker notes (they back-reference a
+# slide), Templafy's customer-data tags, and comments.
+_DROP_REL = ("notesSlide", "/tags", "comments", "notesMaster")
+_PRESENTATION_EXTRAS = ("presProps", "viewProps", "tableStyles")
+
+
+# ---------------------------------------------------------------- identity
+def slide_identity(xml_bytes):
+    """-> (key, how). Same slide in two decks must give the same key."""
+    if pf is not None:
+        try:
+            data = pf.parse_slide_xml(xml_bytes)
+            cids = data.get("shape_creation_ids") or []
+            if cids:
+                return ("cid", frozenset(cids)), "creationId"
+            geom = data.get("geom_sig") or frozenset()
+            text = re.sub(r"\s+", " ", (data.get("text") or "")).strip().lower()
+            if geom or text:
+                return ("struct", geom, text), "structure+text"
+        except Exception:
+            pass
+    body = re.sub(rb"\s+", b" ", xml_bytes)
+    return ("sha", hashlib.sha1(body).hexdigest()), "bytes"
+
+
+# ---------------------------------------------------------------- packaging
+class MasterBuilder:
+    """Accumulates parts for the output package, de-duplicating by content.
+
+    All the decks came out of one Templafy template, so their layouts, masters,
+    themes and images are usually byte-identical. Hashing content before copying
+    collapses those to a single copy instead of ~70, which is the difference
+    between a sane library and an unusable one.
+    """
+
+    def __init__(self):
+        self.parts = {}            # part name -> bytes
+        self.ctypes = {}           # part name -> content type
+        self.by_hash = {}          # sha1 -> part name (dedupe)
+        self.counters = {}
+        self.media_ext = set()
+
+    def _next(self, kind, ext="xml"):
+        self.counters[kind] = self.counters.get(kind, 0) + 1
+        folder = {"slide": "ppt/slides/slide", "layout": "ppt/slideLayouts/slideLayout",
+                  "master": "ppt/slideMasters/slideMaster", "theme": "ppt/theme/theme",
+                  "media": "ppt/media/media", "embed": "ppt/embeddings/object"}[kind]
+        return "%s%d.%s" % (folder, self.counters[kind], ext)
+
+    def add(self, name, data, ctype):
+        self.parts[name] = data
+        if ctype:
+            self.ctypes[name] = ctype
+        if name.startswith("ppt/media/"):
+            ext = os.path.splitext(name)[1].lstrip(".").lower()
+            if ext:
+                self.media_ext.add(ext)
+        return name
+
+    def add_deduped(self, kind, data, ctype, ext="xml"):
+        """-> (part name, was_new). Identical content is stored once."""
+        digest = hashlib.sha1(data).hexdigest()
+        if digest in self.by_hash:
+            return self.by_hash[digest], False
+        name = self._next(kind, ext)
+        self.by_hash[digest] = name
+        self.add(name, data, ctype)
+        return name, True
+
+
+def _abs_target(part):
+    """Rewritten relationships use package-absolute targets.
+
+    Legal OOXML — Templafy's own decks do it — and it removes every chance of
+    getting a `../` wrong while re-pointing a part that moved.
+    """
+    return "/" + part.lstrip("/")
+
+
+def _rebuild_rels(entries):
+    tags = ['<Relationship Id="%s" Type="%s" Target="%s"%s/>'
+            % (rid, rtype, target, ' TargetMode="External"' if external else "")
+            for rid, rtype, target, external in entries]
+    return ooxml.build_rels(tags).encode("utf-8")
+
+
+class Merger:
+    def __init__(self, verbose=False):
+        self.out = MasterBuilder()
+        self.layout_map = {}       # (source deck, layout part) -> output part
+        self.seen = {}             # identity -> block record
+        self.order = []            # identities, in first-seen order
+        self.verbose = verbose
+        self.id_methods = {}
+        self.base_presentation = None
+        self.base_ct = ""
+        self.masters = []          # output master parts, in order added
+
+    # -- closure ------------------------------------------------------
+    def _import_closure(self, lib, part, kind_of):
+        """Copy `part` and everything it depends on. -> output part name.
+
+        Used for layouts and masters, whose closure reaches the theme, the
+        master's other layouts and their media. Missing any of it dangles a
+        relationship, which is a repair dialog.
+        """
+        cached = self.layout_map.get((lib.path, part))
+        if cached:
+            return cached
+
+        data = lib.read_bytes(part)
+        kind = kind_of(part)
+        ctype = ooxml.ctype_for(lib.content_types, part) or ooxml.infer_ctype(part)
+        name, is_new = self.out.add_deduped(kind, data, ctype)
+        self.layout_map[(lib.path, part)] = name
+        if not is_new:
+            return name
+        if kind == "master":
+            self.masters.append(name)
+
+        rels_part = ooxml.rels_part_for(part)
+        entries = []
+        if rels_part in lib.names:
+            for tag in ooxml.rel_tags(lib.read(rels_part)):
+                rid = ooxml.rel_attr(tag, "Id")
+                rtype = ooxml.rel_attr(tag, "Type") or ""
+                target = ooxml.rel_attr(tag, "Target") or ""
+                if 'TargetMode="External"' in tag:
+                    entries.append((rid, rtype, target, True))
+                    continue
+                if any(d in rtype or d in target for d in _DROP_REL):
+                    continue
+                dep = ooxml.resolve_part(part, target)
+                if dep not in lib.names:
+                    continue
+                if "/media/" in dep:
+                    new_dep = self._import_media(lib, dep)
+                else:
+                    new_dep = self._import_closure(lib, dep, kind_of)
+                entries.append((rid, rtype, _abs_target(new_dep), False))
+        self.out.add(ooxml.rels_part_for(name), _rebuild_rels(entries), None)
+        return name
+
+    def _import_media(self, lib, part):
+        ext = os.path.splitext(part)[1].lstrip(".").lower() or "bin"
+        ctype = ooxml.ctype_for(lib.content_types, part)
+        name, _new = self.out.add_deduped("media", lib.read_bytes(part), ctype, ext)
+        return name
+
+    # -- slides -------------------------------------------------------
+    def _kind_of(self, part):
+        low = part.lower()
+        if "/slidelayouts/" in low:
+            return "layout"
+        if "/slidemasters/" in low:
+            return "master"
+        if "/theme/" in low:
+            return "theme"
+        if "/media/" in low:
+            return "media"
+        return "embed"
+
+    def _import_slide(self, lib, part, source_label):
+        xml = lib.read(part)
+        xml = ooxml.strip_custdata(xml)        # Templafy tag refs we do not carry
+
+        rels_part = ooxml.rels_part_for(part)
+        src_rels = lib.read(rels_part) if rels_part in lib.names else ""
+        # keep only what the slide actually references (plus its layout), THEN
+        # re-point what survives — so we never copy media for a dropped rel
+        kept = ooxml.keep_referenced_rels(xml, src_rels)
+
+        entries, layout_out = [], None
+        for tag in ooxml.rel_tags(kept):
+            rid = ooxml.rel_attr(tag, "Id")
+            rtype = ooxml.rel_attr(tag, "Type") or ""
+            target = ooxml.rel_attr(tag, "Target") or ""
+            if 'TargetMode="External"' in tag:
+                entries.append((rid, rtype, target, True))
+                continue
+            if any(d in rtype or d in target for d in _DROP_REL):
+                continue
+            dep = ooxml.resolve_part(part, target)
+            if dep not in lib.names:
+                continue
+            if "/media/" in dep:
+                new_dep = self._import_media(lib, dep)
+            else:
+                new_dep = self._import_closure(lib, dep, self._kind_of)
+                if "slideLayout" in rtype:
+                    layout_out = new_dep
+            entries.append((rid, rtype, _abs_target(new_dep), False))
+
+        name = self.out._next("slide")
+        self.out.add(name, xml.encode("utf-8"), ooxml.CT_SLIDE)
+        self.out.add(ooxml.rels_part_for(name), _rebuild_rels(entries), None)
+        return name, layout_out
+
+    # -- the merge ----------------------------------------------------
+    def add_deck(self, path, label=None):
+        """Fold one deck in. -> [(identity, is_new, block_title)]"""
+        label = label or os.path.splitext(os.path.basename(path))[0]
+        touched = []
+        previous = None            # the slide before this one, in this deck
+        with Library(path) as lib:
+            if self.base_presentation is None:
+                self.base_presentation = lib.presentation
+                self.base_ct = lib.content_types
+                for extra in _PRESENTATION_EXTRAS:
+                    for cand in lib.names:
+                        if extra.lower() in cand.lower() and cand.endswith(".xml"):
+                            self.out.add(cand, lib.read_bytes(cand),
+                                         ooxml.ctype_for(lib.content_types, cand))
+                            break
+            for part in lib.slide_parts:
+                raw = lib.read_bytes(part)
+                identity, how = slide_identity(raw)
+                self.id_methods[how] = self.id_methods.get(how, 0) + 1
+                if identity in self.seen:
+                    self.seen[identity]["decks"].append(label)
+                    touched.append((identity, False, None))
+                    previous = identity
+                    continue
+                out_part, _layout = self._import_slide(lib, part, label)
+                title = slide_title(lib.read(part))
+                self.seen[identity] = {"part": out_part, "title": title,
+                                       "decks": [label], "first_deck": label,
+                                       "source_slide": os.path.basename(part),
+                                       "how": how, "after": previous}
+                self.order.append(identity)
+                previous = identity
+                touched.append((identity, True, title))
+        return touched
+
+    # -- output -------------------------------------------------------
+    def write(self, out_path):
+        slides = [self.seen[i]["part"] for i in self.order]
+        if not slides:
+            raise SystemExit("no slides found in any deck")
+
+        minter = ooxml.RelIdMinter()
+        prs_entries, sld_ids = [], []
+        base = ("http://schemas.openxmlformats.org/officeDocument/2006/"
+                "relationships/")
+        for master in self.masters:
+            rid = minter.mint()
+            prs_entries.append((rid, base + "slideMaster", _abs_target(master), False))
+        master_ids = "".join(
+            '<p:sldMasterId id="%d" r:id="%s"/>' % (2147483648 + n, e[0])
+            for n, e in enumerate(prs_entries))
+        for n, slide in enumerate(slides):
+            rid = minter.mint()
+            prs_entries.append((rid, base + "slide", _abs_target(slide), False))
+            sld_ids.append('<p:sldId id="%d" r:id="%s"/>' % (256 + n, rid))
+        for extra in _PRESENTATION_EXTRAS:
+            for part in self.out.parts:
+                if extra.lower() in part.lower():
+                    prs_entries.append((minter.mint(), base + extra,
+                                        _abs_target(part), False))
+                    break
+
+        prs = self.base_presentation
+        prs = re.sub(r'<p:notesMasterIdLst\b.*?</p:notesMasterIdLst>', '', prs,
+                     flags=re.DOTALL)
+        prs = re.sub(r'<p:notesMasterIdLst\b[^>]*/>', '', prs)
+        prs = re.sub(r'<p:sldMasterIdLst\b.*?</p:sldMasterIdLst>',
+                     '<p:sldMasterIdLst>%s</p:sldMasterIdLst>' % master_ids,
+                     prs, flags=re.DOTALL)
+        prs = re.sub(r'<p:sldMasterIdLst\b[^>]*/>',
+                     '<p:sldMasterIdLst>%s</p:sldMasterIdLst>' % master_ids, prs)
+        if "<p:sldIdLst" in prs:
+            prs = re.sub(r'<p:sldIdLst\b.*?</p:sldIdLst>',
+                         '<p:sldIdLst>%s</p:sldIdLst>' % "".join(sld_ids),
+                         prs, flags=re.DOTALL)
+            prs = re.sub(r'<p:sldIdLst\s*/>',
+                         '<p:sldIdLst>%s</p:sldIdLst>' % "".join(sld_ids), prs)
+        else:
+            prs = prs.replace('</p:sldMasterIdLst>',
+                              '</p:sldMasterIdLst><p:sldIdLst>%s</p:sldIdLst>'
+                              % "".join(sld_ids), 1)
+
+        ct = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+              '<Types xmlns="http://schemas.openxmlformats.org/package/2006/'
+              'content-types">',
+              '<Default Extension="rels" ContentType="application/vnd.'
+              'openxmlformats-package.relationships+xml"/>',
+              '<Default Extension="xml" ContentType="application/xml"/>']
+        default_ct = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                      "gif": "image/gif", "emf": "image/x-emf", "wmf": "image/x-wmf",
+                      "svg": "image/svg+xml", "bmp": "image/bmp",
+                      "tif": "image/tiff", "tiff": "image/tiff"}
+        for ext in sorted(self.out.media_ext):
+            ct.append('<Default Extension="%s" ContentType="%s"/>'
+                      % (ext, default_ct.get(ext, "application/octet-stream")))
+        ct.append('<Override PartName="/ppt/presentation.xml" ContentType='
+                  '"application/vnd.openxmlformats-officedocument.presentationml'
+                  '.presentation.main+xml"/>')
+        for part, ctype in sorted(self.out.ctypes.items()):
+            if part.startswith("ppt/media/"):
+                continue
+            resolved = ooxml.infer_ctype(part) or ctype
+            if resolved:
+                ct.append('<Override PartName="/%s" ContentType="%s"/>'
+                          % (part, resolved))
+        ct.append('</Types>')
+
+        root_rels = _rebuild_rels([
+            ("rId1", base + "officeDocument", "ppt/presentation.xml", False)])
+
+        os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
+        with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("[Content_Types].xml", "".join(ct))
+            z.writestr("_rels/.rels", root_rels)
+            z.writestr("ppt/presentation.xml", prs)
+            z.writestr("ppt/_rels/presentation.xml.rels", _rebuild_rels(prs_entries))
+            for part, data in sorted(self.out.parts.items()):
+                z.writestr(part, data)
+        return out_path
+
+    def blocks(self):
+        """[(output part, title, decks it appeared in, how it was identified)]"""
+        return [(self.seen[i]["part"], self.seen[i]["title"],
+                 self.seen[i]["decks"], self.seen[i]["how"]) for i in self.order]
+
+    def anchors(self, block_ids):
+        """block id -> the id of the block it followed in its source deck.
+
+        A conditional block has to say where it slots back in, or the builder
+        can only append it. The generated decks already show where each slide
+        sat, so we walk back from there.
+
+        The anchor must be present *whenever this block is*, or it vanishes
+        exactly when it is needed — so we accept the nearest predecessor whose
+        set of decks is a superset of this block's. That keeps two conditional
+        slides that always travel together in their original order, instead of
+        flattening both onto the last unconditional slide.
+        """
+        by_identity = dict(zip(self.order, block_ids))
+        out = {}
+        for identity in self.order:
+            mine = set(self.seen[identity]["decks"])
+            walk = self.seen[identity].get("after")
+            guard = set()
+            while walk is not None and walk not in guard:
+                guard.add(walk)
+                if set(self.seen[walk]["decks"]) >= mine:
+                    out[by_identity[identity]] = by_identity[walk]
+                    break
+                walk = self.seen[walk].get("after")
+        return out
+
+
+# ---------------------------------------------------------------- tokenising
+# A generated deck has its values already substituted: the cover says
+# "Example Corporation", not "{{ClientName}}". Merging those decks therefore
+# produces a *snapshot of one client*, not a template. Putting the placeholders
+# back is what makes the result reusable.
+#
+# This is v1's token detection run backwards, and it inherits v1's warning
+# (v1-learnings §3): a value can be both dynamic and static on the same slide —
+# "New York" is a city answer *and* an office address in the boilerplate.
+# So it is opt-in, whole-word only, and reports every field it touched.
+DEFAULT_TOKENS = {
+    "FullClientName": "ClientName",
+    "ShortClientName": "ShortClientName",
+    "DueDate": "DueDate",
+}
+MIN_TOKEN_LEN = 4          # never swap something as short as a code or initial
+
+_A_T = re.compile(r'(<a:t(?:\s[^>]*)?>)(.*?)(</a:t>)', re.DOTALL)
+
+
+def _guess_token_map(payload):
+    """Payload field -> placeholder name, for the text-substitution fields.
+
+    Most payload answers *select slides*; only a few are literal text in the
+    deck. Those are the client names, the date, and the city — the same short
+    list v1 arrived at.
+    """
+    token_map = {}
+    for field in payload:
+        if field in DEFAULT_TOKENS:
+            token_map[field] = DEFAULT_TOKENS[field]
+        elif "city" in field.lower():
+            token_map[field] = "City"
+    return token_map
+
+
+def _replacements(payload, token_map):
+    """[(literal, placeholder, field, format)] longest-first.
+
+    A date is written many ways ("November 30, 2026", "30/11/2026"). We swap
+    whichever the deck actually used, and remember *which* — otherwise the
+    binding has no way to render it back and the rebuilt deck shows a raw
+    20261130.
+    """
+    from engine.bindings import date_formats
+    reps = []
+    for field, name in token_map.items():
+        value = payload.get(field)
+        if value in (None, "", True, False):
+            continue
+        text = str(value)
+        variants = date_formats(text)
+        if variants:
+            for fmt, rendered in variants.items():
+                if len(rendered) >= MIN_TOKEN_LEN:
+                    reps.append((rendered, "{{%s}}" % name, field, fmt))
+        elif len(text) >= MIN_TOKEN_LEN:
+            reps.append((text, "{{%s}}" % name, field, None))
+    reps.sort(key=lambda r: -len(r[0]))     # "Example Corporation" before "Example"
+    return reps
+
+
+def tokenise_part(xml, reps):
+    """-> (new xml, {literal: count}, {field: {format: count}}).
+
+    Substitution happens only inside <a:t> and only on whole words, so
+    "Example" never turns "Examples" into "{{ShortClientName}}s" (v1 §2).
+    """
+    if not reps:
+        return xml, {}, {}
+    hits, formats = {}, {}
+    compiled = [(re.compile(r'(?<!\w)' + re.escape(lit) + r'(?!\w)'), lit, ph, fld, fmt)
+                for lit, ph, fld, fmt in reps]
+
+    def one(m):
+        from engine import ooxml as _o
+        raw = _o.xml_unescape(m.group(2))
+        new = raw
+        for pattern, lit, ph, fld, fmt in compiled:
+            new, n = pattern.subn(ph, new)
+            if n:
+                hits[lit] = hits.get(lit, 0) + n
+                if fmt:
+                    formats.setdefault(fld, {})
+                    formats[fld][fmt] = formats[fld].get(fmt, 0) + n
+        if new == raw:
+            return m.group(0)
+        return m.group(1) + _o.xml_escape(new) + m.group(3)
+
+    return _A_T.sub(one, xml), hits, formats
+
+
+def tokenise(merger, payloads, token_map=None):
+    """Put placeholders back into every merged slide. -> report dict."""
+    totals, per_field, used_map = {}, {}, dict(token_map or {})
+    fmt_counts = {}
+    for identity in merger.order:
+        rec = merger.seen[identity]
+        payload = payloads.get(rec["first_deck"])
+        if not payload:
+            continue
+        if not used_map:
+            used_map = _guess_token_map(payload)
+        reps = _replacements(payload, used_map)
+        part = rec["part"]
+        xml = merger.out.parts[part].decode("utf-8", "ignore")
+        new_xml, hits, formats = tokenise_part(xml, reps)
+        if hits:
+            merger.out.parts[part] = new_xml.encode("utf-8")
+        for literal, n in hits.items():
+            totals[literal] = totals.get(literal, 0) + n
+        for field, seen_fmts in formats.items():
+            for fmt, n in seen_fmts.items():
+                fmt_counts.setdefault(field, {})
+                fmt_counts[field][fmt] = fmt_counts[field].get(fmt, 0) + n
+    for field, name in used_map.items():
+        per_field[name] = field
+    # the rendering the deck used most often is the one to bind
+    chosen = {f: max(c.items(), key=lambda kv: kv[1])[0]
+              for f, c in fmt_counts.items() if c}
+    return {"replacements": totals, "map": per_field, "fields": used_map,
+            "formats": chosen}
+
+
+def _placeholder_bindings(token_report):
+    """The placeholders map for rules.json, including the date rendering the
+    source decks actually used."""
+    if not token_report:
+        return {}
+    formats = token_report.get("formats", {})
+    out = {}
+    for field, name in token_report.get("fields", {}).items():
+        binding = {"from": "field", "field": field}
+        if field in formats:
+            binding["format"] = formats[field]
+        out["{{%s}}" % name] = binding
+    return out
+
+
+# ---------------------------------------------------------------- rules
+def flatten(obj, prefix=""):
+    out = {}
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            out.update(flatten(v, "%s.%s" % (prefix, k) if prefix else str(k)))
+    else:
+        out[prefix] = obj
+    return out
+
+
+def propose_rules(block_ids, blocks, payloads):
+    """Work out *why* each slide appeared, from which decks contained it.
+
+    The payloads are OFAT — one field changed at a time — so a slide that shows
+    up in exactly the decks where `Peer_review` is true is almost certainly
+    controlled by that answer. We look for a single (field, value) pair whose
+    decks match the slide's decks exactly, and propose it.
+
+    This is a **proposal, not a conclusion**. Anything unexplained is left in
+    the baseline and flagged, because a wrong rule that looks confident is worse
+    than an obvious gap. The author confirms it (workflow step 3).
+    """
+    all_decks = set()
+    for _p, _t, decks, _h in blocks:
+        all_decks.update(decks)
+    all_decks &= set(payloads)
+    if not all_decks:
+        return {}, []
+
+    # (field, value) -> the decks whose payload has it
+    by_value = {}
+    for deck in all_decks:
+        for field, value in flatten(payloads[deck]).items():
+            by_value.setdefault((field, _norm(value)), set()).add(deck)
+
+    proposals, notes = {}, []
+    for bid, (_part, _title, decks, _how) in zip(block_ids, blocks):
+        present = set(decks) & all_decks
+        if present == all_decks:
+            continue                                  # in every deck: baseline
+        matches = sorted((f, v) for (f, v), d in by_value.items() if d == present)
+        # a field that never varies explains nothing, even if the sets match
+        matches = [(f, v) for f, v in matches
+                   if len({_norm(x) for x in
+                           (flatten(p).get(f) for p in payloads.values())}) > 1]
+        if len(matches) == 1:
+            field, value = matches[0]
+            proposals[bid] = {"field": field, "value": value,
+                              "decks": sorted(present)}
+        elif matches:
+            proposals[bid] = {"field": matches[0][0], "value": matches[0][1],
+                              "decks": sorted(present),
+                              "ambiguous": ["%s=%s" % m for m in matches[:6]]}
+            notes.append("%s: %d answers explain it equally well (%s) — picked "
+                         "the first; confirm which is right"
+                         % (bid, len(matches),
+                            ", ".join("%s=%s" % m for m in matches[:3])))
+        else:
+            notes.append("%s: appears in %d of %d decks but no single answer "
+                         "explains it — left in the baseline, needs a human"
+                         % (bid, len(present), len(all_decks)))
+    return proposals, notes
+
+
+def _norm(value):
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return re.sub(r"\s+", " ", str(value)).strip()
+
+
+def load_payloads(folder, deck_labels):
+    """Pair each deck with its payload by file name (`01_x.pptx` <- `01_x.json`,
+    or a shared numeric prefix)."""
+    if not folder or not os.path.isdir(folder):
+        return {}, []
+    files = {os.path.splitext(f)[0]: os.path.join(folder, f)
+             for f in os.listdir(folder) if f.endswith(".json")}
+    by_prefix = {}
+    for stem in files:
+        m = re.match(r'(\d+)', stem)
+        if m:
+            by_prefix.setdefault(m.group(1), stem)
+
+    paired, unpaired = {}, []
+    for label in deck_labels:
+        stem = None
+        if label in files:
+            stem = label
+        else:
+            m = re.match(r'(\d+)', label)
+            if m and m.group(1) in by_prefix:
+                stem = by_prefix[m.group(1)]
+        if stem is None:
+            unpaired.append(label)
+            continue
+        with open(files[stem], encoding="utf-8") as fh:
+            paired[label] = json.load(fh)
+    return paired, unpaired
+
+
+# ---------------------------------------------------------------- cli
+def collect_decks(inputs):
+    decks = []
+    for item in inputs:
+        if os.path.isdir(item):
+            decks.extend(sorted(glob.glob(os.path.join(item, "*.pptx"))))
+        else:
+            decks.extend(sorted(glob.glob(item)) or [item])
+    seen, out = set(), []
+    for d in decks:
+        real = os.path.abspath(d)
+        if real not in seen and not os.path.basename(d).startswith("~$"):
+            seen.add(real)
+            out.append(d)
+    return out
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("decks", nargs="+", help="deck files, globs, or a folder")
+    ap.add_argument("--name", default="firm", help="template name to create")
+    ap.add_argument("--templates", default=os.path.join(HERE, "templates"))
+    ap.add_argument("--payloads", help="folder of payload .json, to propose rules")
+    ap.add_argument("--tokenise", "--tokenize", dest="tokenise", action="store_true",
+                    help="put {{placeholders}} back where the payload's values "
+                         "were substituted (needs --payloads)")
+    ap.add_argument("--overwrite", action="store_true")
+    ap.add_argument("-v", "--verbose", action="store_true")
+    args = ap.parse_args(argv)
+
+    decks = collect_decks(args.decks)
+    if not decks:
+        ap.error("no .pptx found in %s" % ", ".join(args.decks))
+
+    folder = os.path.join(args.templates, args.name)
+    if os.path.exists(folder) and not args.overwrite:
+        ap.error("template %r already exists at %s — pass --overwrite"
+                 % (args.name, folder))
+    os.makedirs(folder, exist_ok=True)
+
+    print("Merging %d deck(s)" % len(decks))
+    merger = Merger(verbose=args.verbose)
+    labels = []
+    for n, path in enumerate(decks, 1):
+        label = os.path.splitext(os.path.basename(path))[0]
+        labels.append(label)
+        try:
+            touched = merger.add_deck(path, label)
+        except Exception as exc:
+            print("  ! %s skipped: %s: %s" % (label, type(exc).__name__, exc))
+            continue
+        added = sum(1 for _i, is_new, _t in touched if is_new)
+        if args.verbose or added:
+            print("  [%d/%d] %-34s %3d slides, %2d new"
+                  % (n, len(decks), label[:34], len(touched), added))
+
+    payloads, unpaired = load_payloads(args.payloads, labels)
+
+    token_report = None
+    if args.tokenise:
+        if not payloads:
+            ap.error("--tokenise needs --payloads: the payload is what tells us "
+                     "which literals were substituted values")
+        token_report = tokenise(merger, payloads)
+
+    out_pptx = os.path.join(folder, "library.pptx")
+    merger.write(out_pptx)
+    blocks = merger.blocks()
+
+    # block ids from slide titles, disambiguated
+    ids, used = [], {}
+    for _part, title, _decks, _how in blocks:
+        bid = slugify(title, fallback="") or "slide"
+        if bid in used:
+            used[bid] += 1
+            bid = "%s_%d" % (bid, used[bid])
+        else:
+            used[bid] = 1
+        ids.append(bid)
+
+    with open(os.path.join(folder, "blocks.json"), "w", encoding="utf-8") as fh:
+        json.dump({"_comment": "Slide -> block id, derived from slide titles. "
+                               "Rename freely; rules.json refers to these ids.",
+                   "blocks": {os.path.basename(p): {"id": b, "title": t}
+                              for b, (p, t, _d, _h) in zip(ids, blocks)}},
+                  fh, indent=2, ensure_ascii=False)
+
+    provenance = {b: {"title": t, "slide": os.path.basename(p),
+                      "identified_by": h, "deck_count": len(d), "decks": d}
+                  for b, (p, t, d, h) in zip(ids, blocks)}
+    with open(os.path.join(folder, "provenance.json"), "w", encoding="utf-8") as fh:
+        json.dump({"_comment": "Which generated decks each slide came from. "
+                               "This is the evidence behind rules.json.",
+                   "deck_count": len(labels), "blocks": provenance},
+                  fh, indent=2, ensure_ascii=False)
+
+    proposals, notes = ({}, [])
+    if payloads:
+        proposals, notes = propose_rules(ids, blocks, payloads)
+
+    baseline = [b for b in ids if b not in proposals]
+    anchors = merger.anchors(ids)
+    rule_blocks, unanchored = {}, []
+    for bid, info in proposals.items():
+        rule_blocks[bid] = {
+            "slides": [bid],
+            "when": {"field": info["field"], "eq": info["value"]},
+            "_evidence": "in %d deck(s): %s" % (len(info["decks"]),
+                                                ", ".join(info["decks"][:4])),
+        }
+        # the anchor may itself be conditional — `anchors()` only offers one
+        # that is present whenever this block is, and the rules engine places
+        # them in dependency order
+        anchor = anchors.get(bid)
+        if anchor and (anchor in baseline or anchor in proposals):
+            rule_blocks[bid]["insert_after"] = anchor
+        else:
+            unanchored.append(bid)
+        if info.get("ambiguous"):
+            rule_blocks[bid]["_confirm"] = ("equally explained by: %s"
+                                            % ", ".join(info["ambiguous"]))
+    with open(os.path.join(folder, "rules.json"), "w", encoding="utf-8") as fh:
+        json.dump({
+            "name": args.name,
+            "library": "library.pptx",
+            "_comment": ("Baseline = slides in every deck. Blocks with a `when` "
+                         "are PROPOSED from which decks contained them — confirm "
+                         "each before trusting it. Evidence: provenance.json."),
+            "baseline": baseline,
+            "blocks": rule_blocks,
+            "placeholders": _placeholder_bindings(token_report),
+        }, fh, indent=2, ensure_ascii=False)
+
+    with open(os.path.join(folder, "template.json"), "w", encoding="utf-8") as fh:
+        json.dump({"name": args.name,
+                   "description": "Master library merged from %d generated decks"
+                                  % len(labels),
+                   "library": "library.pptx"}, fh, indent=2)
+
+    # ---- report
+    total_slides = sum(len(d) for _p, _t, d, _h in blocks)
+    print("\nMaster library: %s" % out_pptx)
+    print("  %d unique slides from %d deck(s) (%d slide instances collapsed)"
+          % (len(blocks), len(labels), total_slides))
+    for how, n in sorted(merger.id_methods.items(), key=lambda kv: -kv[1]):
+        print("      identified by %-16s %d" % (how, n))
+    if "creationId" not in merger.id_methods and blocks:
+        print("      ! no creationIds found — slides were matched on structure "
+              "and text,\n        so slides differing only by client name may "
+              "have been counted twice.")
+    print("  %d baseline (in every deck), %d conditional (proposed)"
+          % (len(baseline), len(proposals)))
+    print("  ! block ids come from slide titles, which in a generated deck may")
+    print("    contain client text - review: python build.py inspect %s" % args.name)
+    if unpaired:
+        print("  ! no payload matched for %d deck(s): %s"
+              % (len(unpaired), ", ".join(unpaired[:5])))
+
+    if token_report is not None:
+        hits = token_report["replacements"]
+        print("")
+        print("  Placeholders restored:")
+        for literal, n in sorted(hits.items(), key=lambda kv: -kv[1]):
+            print("      %-34s %3d occurrence(s)" % ('"%s"' % literal[:32], n))
+        if not hits:
+            print("      none - the payload's values do not appear in the deck "
+                  "text as written")
+        print("      Check these: a value can be a real answer in one place and")
+        print("      ordinary wording in another (v1 hit this with \"New York\").")
+        print("      Review with: python build.py preview %s" % args.name)
+    elif payloads:
+        print("")
+        print("  ! No placeholders in the library: these are GENERATED decks, so")
+        print("    values like the client name are already substituted. The library")
+        print("    is a snapshot of one client until you re-run with --tokenise.")
+    if proposals:
+        print("  %d of %d conditional block(s) placed with insert_after"
+              % (len(proposals) - len(unanchored), len(proposals)))
+    for bid in unanchored:
+        print("  ? %s has no stable slide before it - it will be appended; "
+              "set insert_after by hand" % bid)
+    for note in notes:
+        print("  ? %s" % note)
+
+    validator = _load_validator()
+    if validator:
+        issues = validator.validate(out_pptx)
+        if issues:
+            print("\n  FAILED validation - %d issue(s):" % len(issues))
+            for kind, where, detail in issues[:15]:
+                print("      [%s] %s: %s" % (kind, where, detail))
+            return 1
+        print("  validated OK - no repair dialog expected")
+
+    print("\nNext:")
+    print("  python build.py inspect %s      # check the block ids read well" % args.name)
+    print("  python build.py preview %s      # look at every slide" % args.name)
+    print("  then confirm the proposed `when` rules in %s"
+          % os.path.join(folder, "rules.json"))
+    return 0
+
+
+def _load_validator():
+    import importlib.util
+    path = os.path.join(PARENT, "validate_pptx.py")
+    if not os.path.exists(path):
+        return None
+    spec = importlib.util.spec_from_file_location("validate_pptx", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+if __name__ == "__main__":
+    sys.exit(main())

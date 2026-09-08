@@ -45,6 +45,32 @@ python tests/test_engine.py              # 70 tests, standard library only
 Every build runs `../validate_pptx.py` before reporting success — decision D5: a deck
 that doesn't validate never reaches a user.
 
+## Starting from decks Templafy already generated
+
+If you have the OFAT decks rather than a template, merge them into a library:
+
+```bash
+python tools/build_master_deck.py ../data/decks        --payloads ../data/payloads --name firm --tokenise
+```
+
+It keeps one copy of each distinct slide (matched on PowerPoint's
+`<a16:creationId>` shape GUIDs, which survive the text differing between decks),
+carries every layout, master, theme and image, and de-duplicates those by content
+so you get one master rather than seventy.
+
+Because it pairs each deck with the payload that produced it, it also works out
+**why** each slide was there — a slide present in exactly the decks where
+`Peer_review` is true is proposed as `when: Peer_review == true` — and where it
+sat, as `insert_after`. Those land in `rules.json` as **proposals to confirm**,
+with the evidence in `provenance.json`.
+
+`--tokenise` matters: a generated deck has its values already substituted, so
+without it the library is a snapshot of one client. It puts `{{ClientName}}`,
+`{{DueDate}}` and `{{City}}` back where the payload's values appear — whole words
+only, inside `<a:t>` — and records which date rendering the deck used so a rebuild
+reproduces it. Review the result: a value can be a real answer in one place and
+ordinary wording in another.
+
 ## Adding your own template — no code changes
 
 Point `import` at any `.pptx`. The deck is copied **byte for byte** and never

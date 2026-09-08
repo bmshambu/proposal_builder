@@ -6,7 +6,9 @@
 Each test that guards a v1 scar says which one, so nobody "simplifies" the fix
 back out. Run this before every commit that touches engine/.
 """
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import re
@@ -698,6 +700,222 @@ class TestSvgPreview(EngineTestCase):
         xml.parsers.expat.ParserCreate().Parse(r["svg"].encode("utf-8"), True)
         self.assertIn("About us", "".join(
             re.findall(r'<tspan[^>]*>(.*?)</tspan>', r["svg"])))
+
+
+# ---------------------------------------------------------------- merging
+class TestMasterMerge(EngineTestCase):
+    """Merging the generated Templafy decks back into one library.
+
+    Synthesised here the same way the real ones were made — OFAT payloads that
+    differ in exactly one answer — so the merge, the rule proposal and the
+    round trip are all exercised without needing a confidential deck.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
+        import build_master_deck
+        cls.bmd = build_master_deck
+
+    def setUp(self):
+        self.work = tempfile.mkdtemp(prefix="pptgen2_merge_", dir=self.tmp)
+        self.decks = os.path.join(self.work, "decks")
+        self.pays = os.path.join(self.work, "payloads")
+        self.roots = os.path.join(self.work, "templates")
+        for d in (self.decks, self.pays, self.roots):
+            os.makedirs(d)
+
+        common = {"FullClientName": "Example Corporation",
+                  "ShortClientName": "Example", "DueDate": "20261130",
+                  "City": "New York"}
+        self.cases = {"00_baseline": dict(common, AuditType="Statutory Audit"),
+                      "01_expansion": dict(common,
+                                           AuditType="Expansion of Services")}
+        for name, payload in self.cases.items():
+            with open(os.path.join(self.pays, name + ".json"), "w") as fh:
+                json.dump(payload, fh)
+            build(LIBRARY, self.rules, payload,
+                  os.path.join(self.decks, name + ".pptx"), data_sources=self.data)
+
+    def merge(self, *extra):
+        argv = [self.decks, "--payloads", self.pays, "--templates", self.roots,
+                "--name", "merged", "--overwrite"] + list(extra)
+        buffer = io.StringIO()                    # the tool reports to a human
+        with contextlib.redirect_stdout(buffer):
+            code = self.bmd.main(argv)
+        self.report = buffer.getvalue()
+        return code
+
+    def merged(self):
+        return Template(os.path.join(self.roots, "merged"))
+
+    def rules_json(self):
+        with open(os.path.join(self.roots, "merged", "rules.json"),
+                  encoding="utf-8") as fh:
+            return json.load(fh)
+
+    # -- the merge --------------------------------------------------------
+    def test_decks_collapse_to_the_union_of_their_slides(self):
+        """7 + 8 slide instances, 9 distinct slides."""
+        self.assertEqual(self.merge(), 0)
+        with self.merged().open_library() as lib:
+            self.assertEqual(len(lib.blocks), 9)
+
+    def test_the_master_validates(self):
+        """It is assembled from parts of several packages — the one thing that
+        must never break."""
+        self.merge()
+        v = _validator()
+        if v is None:
+            self.skipTest("validate_pptx.py not available")
+        self.assertEqual(
+            v.validate(os.path.join(self.roots, "merged", "library.pptx")), [])
+
+    def test_shared_layouts_and_media_are_stored_once(self):
+        """Both decks carry the same master, layout and theme. Copying them per
+        deck would give a library with 70 of each."""
+        self.merge()
+        z = zipfile.ZipFile(os.path.join(self.roots, "merged", "library.pptx"))
+        layouts = [n for n in z.namelist() if "slideLayouts/slideLayout" in n
+                   and n.endswith(".xml")]
+        masters = [n for n in z.namelist() if "slideMasters/slideMaster" in n
+                   and n.endswith(".xml")]
+        self.assertEqual(len(layouts), 1)
+        self.assertEqual(len(masters), 1)
+
+    def test_slides_are_copied_byte_for_byte(self):
+        """The merge must never redraw a slide — only move it."""
+        self.merge()
+        src = zipfile.ZipFile(os.path.join(self.decks, "00_baseline.pptx"))
+        out = zipfile.ZipFile(os.path.join(self.roots, "merged", "library.pptx"))
+        src_text = {" ".join(A_T.findall(src.read(n).decode("utf-8")))
+                    for n in _slide_parts(src)}
+        out_text = {" ".join(A_T.findall(out.read(n).decode("utf-8")))
+                    for n in _slide_parts(out)}
+        self.assertTrue(src_text <= out_text,
+                        "every slide of the source deck survives the merge")
+
+    # -- rule proposal ----------------------------------------------------
+    def test_the_controlling_answer_is_identified(self):
+        """The whole point of pairing decks with payloads: work out *why* a
+        slide was in the deck."""
+        self.merge()
+        rules = self.rules_json()
+        blocks = rules["blocks"]
+        self.assertTrue(blocks, "conditional blocks should be proposed")
+        for bid, spec in blocks.items():
+            self.assertEqual(spec["when"]["field"], "AuditType", bid)
+        by_value = {spec["when"]["eq"] for spec in blocks.values()}
+        self.assertEqual(by_value, {"Statutory Audit", "Expansion of Services"})
+
+    def test_slides_in_every_deck_stay_in_the_baseline(self):
+        self.merge()
+        rules = self.rules_json()
+        self.assertEqual(len(rules["baseline"]), 6)
+        self.assertIn("about_us", rules["baseline"])
+
+    def test_conditional_blocks_are_anchored_where_they_sat(self):
+        """Without insert_after the builder can only append, and the deck comes
+        back in the wrong order."""
+        self.merge()
+        blocks = self.rules_json()["blocks"]
+        anchored = [b for b, s in blocks.items() if s.get("insert_after")]
+        self.assertEqual(len(anchored), len(blocks))
+
+    def test_an_anchor_may_be_another_conditional_block(self):
+        """Two slides that always travel together keep their order, instead of
+        both flattening onto the last unconditional slide."""
+        self.merge()
+        blocks = self.rules_json()["blocks"]
+        chained = [s["insert_after"] for s in blocks.values()
+                   if s.get("insert_after") in blocks]
+        self.assertTrue(chained, "expected one block to anchor to another")
+
+    # -- tokenising -------------------------------------------------------
+    def test_without_tokenising_the_library_is_one_client_snapshot(self):
+        """Generated decks have their values already substituted. Saying so is
+        the point — a silent snapshot would look like a working template."""
+        self.merge()
+        with self.merged().open_library() as lib:
+            self.assertEqual(lib.all_placeholders(), set())
+            text = " ".join(A_T.findall(lib.read(p)) and
+                            " ".join(A_T.findall(lib.read(p)))
+                            for p in lib.slide_parts)
+        self.assertIn("Example Corporation", text)
+
+    def test_tokenising_puts_the_placeholders_back(self):
+        self.merge("--tokenise")
+        with self.merged().open_library() as lib:
+            found = lib.all_placeholders()
+            text = " ".join(" ".join(A_T.findall(lib.read(p)))
+                            for p in lib.slide_parts)
+        self.assertIn("ClientName", found)
+        self.assertIn("DueDate", found)
+        self.assertNotIn("Example Corporation", text)
+        self.assertNotIn("November 30, 2026", text)
+
+    def test_the_date_rendering_is_remembered_in_the_binding(self):
+        """The deck showed "November 30, 2026"; without recording which format
+        that was, a rebuild emits a raw 20261130."""
+        self.merge("--tokenise")
+        binding = self.rules_json()["placeholders"]["{{DueDate}}"]
+        self.assertEqual(binding["field"], "DueDate")
+        self.assertEqual(binding["format"], "long_comma")
+
+    def test_tokenising_matches_whole_words_only(self):
+        """v1 §2: "Example" must not turn "Examples" into "{{ShortClientName}}s"."""
+        reps = [("Example", "{{Short}}", "ShortClientName", None)]
+        xml = "<a:t>Examples of Example work</a:t>"
+        out, hits, _fmt = self.bmd.tokenise_part(xml, reps)
+        self.assertIn("Examples of {{Short}} work", out)
+        self.assertEqual(hits["Example"], 1)
+
+    def test_tokenising_never_touches_markup(self):
+        reps = [("Example Corporation", "{{ClientName}}", "FullClientName", None)]
+        tbl = ('<a:tbl><a:tr><a:tc><a:txBody><a:p><a:r>'
+               '<a:t>Example Corporation</a:t></a:r></a:p></a:txBody></a:tc>'
+               '</a:tr></a:tbl>')
+        out, _hits, _fmt = self.bmd.tokenise_part(tbl, reps)
+        self.assertIn("<a:tbl>", out)
+        self.assertIn("<a:t>{{ClientName}}</a:t>", out)
+
+    # -- the whole loop ---------------------------------------------------
+    def test_round_trip_builds_a_deck_for_a_different_client(self):
+        """Templafy decks -> master library -> a new client's deck. This is the
+        point of the whole exercise."""
+        self.merge("--tokenise")
+        answers = {"FullClientName": "Acme Holdings plc", "ShortClientName": "Acme",
+                   "DueDate": "20270601", "City": "Leeds",
+                   "AuditType": "Expansion of Services"}
+        report = build_template(self.merged(), answers,
+                                self.out("merged_roundtrip.pptx"))
+        text = _deck_text(report["out"])
+        self.assertIn("Acme Holdings plc", text)
+        self.assertIn("June 1, 2027", text)
+        self.assertIn("Leeds", text)
+        for leaked in ("Example Corporation", "November 30, 2026", "New York",
+                       "20270601", "{{"):
+            self.assertNotIn(leaked, text, "%r leaked into the deck" % leaked)
+        self.assertEqual(report["unfilled_placeholders"], [])
+        v = _validator()
+        if v:
+            self.assertEqual(v.validate(report["out"]), [])
+
+    def test_round_trip_reproduces_the_original_slide_order(self):
+        self.merge("--tokenise")
+        answers = dict(self.cases["01_expansion"])
+        report = build_template(self.merged(), answers,
+                                self.out("merged_order.pptx"))
+        original = zipfile.ZipFile(os.path.join(self.decks, "01_expansion.pptx"))
+        expected = [" ".join(A_T.findall(original.read(n).decode("utf-8")))
+                    for n in _slide_parts(original)]
+        rebuilt = zipfile.ZipFile(report["out"])
+        actual = [" ".join(A_T.findall(rebuilt.read(n).decode("utf-8")))
+                  for n in _slide_parts(rebuilt)]
+        self.assertEqual(len(actual), len(expected))
+        # same slides, same order (text is identical: same answers)
+        self.assertEqual(actual, expected)
 
 
 if __name__ == "__main__":

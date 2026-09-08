@@ -146,21 +146,37 @@ class Rules:
                 trace.append("skip %s (baseline block, condition false)" % bid)
 
         # 2. conditional blocks slotted in via insert_after
-        extras = [(bid, spec) for bid, spec in self.blocks.items()
-                  if bid not in self.baseline]
-        for bid, spec in sorted(extras):                    # sorted = deterministic
-            if not evaluate(spec.get("when", "always"), flat):
-                continue
-            anchor = spec.get("insert_after")
-            if anchor is None:
-                order.append(bid)
-                trace.append("add %s (appended: no insert_after)" % bid)
-            elif anchor in order:
-                order.insert(order.index(anchor) + 1, bid)
-                trace.append("add %s (after %s)" % (bid, anchor))
-            else:
-                order.append(bid)
-                trace.append("add %s (anchor %r absent — appended)" % (bid, anchor))
+        #
+        # A block may anchor to another conditional block ("this always follows
+        # that"), so placement runs in passes: each pass places whatever has its
+        # anchor already down. Doing it in one sorted sweep would append a block
+        # whose anchor simply had not been placed yet, which made the output
+        # order depend on how the ids happened to sort.
+        pending = [(bid, spec) for bid, spec in sorted(self.blocks.items())
+                   if bid not in self.baseline
+                   and evaluate((spec or {}).get("when", "always"), flat)]
+        while pending:
+            progressed = []
+            for bid, spec in pending:
+                anchor = (spec or {}).get("insert_after")
+                if anchor is None:
+                    order.append(bid)
+                    trace.append("add %s (appended: no insert_after)" % bid)
+                elif anchor in order:
+                    order.insert(order.index(anchor) + 1, bid)
+                    trace.append("add %s (after %s)" % (bid, anchor))
+                else:
+                    continue                     # anchor not placed yet: retry
+                progressed.append((bid, spec))
+            if not progressed:
+                # every remaining anchor is absent from this deck (its own
+                # condition was false, or it is a typo) — append, and say so
+                for bid, spec in pending:
+                    order.append(bid)
+                    trace.append("add %s (anchor %r absent — appended)"
+                                 % (bid, (spec or {}).get("insert_after")))
+                break
+            pending = [p for p in pending if p not in progressed]
 
         # 3. resolve each block to its slides (variants applied here)
         resolved = []
