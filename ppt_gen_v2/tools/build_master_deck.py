@@ -898,6 +898,15 @@ def main(argv=None):
             "placeholders": _placeholder_bindings(token_report),
         }, fh, indent=2, ensure_ascii=False)
 
+    # A payload IS a set of answers, so the merge can leave one behind for
+    # `check` to build a test deck from. Without it the check has to skip the
+    # one step that proves the template actually works.
+    if payloads:
+        first = sorted(payloads)[0]
+        with open(os.path.join(folder, "answers.sample.json"), "w",
+                  encoding="utf-8") as fh:
+            json.dump(payloads[first], fh, indent=2, ensure_ascii=False)
+
     with open(os.path.join(folder, "template.json"), "w", encoding="utf-8") as fh:
         json.dump({"name": args.name,
                    "description": "Master library merged from %d generated decks"
@@ -968,14 +977,9 @@ def main(argv=None):
 
 
 def _load_validator():
-    import importlib.util
-    path = os.path.join(PARENT, "validate_pptx.py")
-    if not os.path.exists(path):
-        return None
-    spec = importlib.util.spec_from_file_location("validate_pptx", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    """Vendored with the engine, so a standalone deployment still validates."""
+    from engine import validate as _validate
+    return _validate
 
 
 if __name__ == "__main__":

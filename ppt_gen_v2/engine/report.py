@@ -124,13 +124,15 @@ def _check_package(rep, template, lib, validator):
                 "validate_pptx.py was not found, so the package was not "
                 "structurally checked")
 
-    # a master per deck means the merge failed to de-duplicate
-    if rep.facts["masters"] > 3:
+    # A real branded template legitimately has a handful of masters (title,
+    # content, section, appendix). Dozens means a merge failed to de-duplicate
+    # them - which is the thing worth saying.
+    if rep.facts["masters"] > 8:
         rep.add(WARNING, "many-masters",
                 "%d slide masters in one library" % rep.facts["masters"],
-                "Merged decks should share a master. This many usually means "
-                "the source decks' masters differed byte for byte, so nothing "
-                "de-duplicated - the library will be large and may look "
+                "Decks merged from one template should end up sharing a handful "
+                "of masters. This many means the source decks' masters were not "
+                "recognised as the same - the library will be large and may look "
                 "inconsistent.")
 
 

@@ -16,7 +16,6 @@ Every build is validated before it is reported as done (decision D5): a deck
 that does not pass never reaches a user.
 """
 import argparse
-import importlib.util
 import json
 import os
 import sys
@@ -36,18 +35,14 @@ TEMPLATES = os.path.join(HERE, "templates")
 
 
 def load_validator():
-    """v1's `validate_pptx.py`, imported from the parent project.
+    """The structural validator - vendored, so it is always present.
 
-    Kept as the single copy on purpose (v1-learnings §4: "keep as-is") — one
-    validator, one definition of "will PowerPoint open this".
+    It used to be imported from v1 next door. On a standalone deployment that
+    import found nothing and every build ran unvalidated while reporting
+    success, which is exactly what decision D5 exists to prevent.
     """
-    path = os.path.join(os.path.dirname(HERE), "validate_pptx.py")
-    if not os.path.exists(path):
-        return None
-    spec = importlib.util.spec_from_file_location("validate_pptx", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    from engine import validate as _validate
+    return _validate
 
 
 def read_json(path):

@@ -43,8 +43,10 @@ python build.py make demo --answers templates/demo/answers.expansion.json --out 
 python tests/test_engine.py              # 70 tests, standard library only
 ```
 
-Every build runs `../validate_pptx.py` before reporting success — decision D5: a deck
-that doesn't validate never reaches a user.
+Every build runs the structural validator (`engine/validate.py`) before reporting
+success — decision D5: a deck that doesn't validate never reaches a user. The
+validator is vendored with the engine on purpose, so a standalone deployment
+cannot end up silently skipping it.
 
 ## Starting from decks Templafy already generated
 
