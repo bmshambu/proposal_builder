@@ -32,6 +32,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 import zipfile
 
@@ -55,20 +56,47 @@ _PRESENTATION_EXTRAS = ("presProps", "viewProps", "tableStyles")
 
 
 # ---------------------------------------------------------------- identity
-def slide_identity(xml_bytes):
-    """-> (key, how). Same slide in two decks must give the same key."""
+# PowerPoint stamps <a16:creationId id="{GUID}"/> on shapes (and p14:creationId
+# on slides). Read straight out of the raw XML rather than through a parsed
+# tree: it costs nothing, and it cannot be defeated by anything else in the
+# slide that a full parse might choke on. Falling back to hashing whole slides
+# is a silent disaster — every deck's copy of a slide differs by its client
+# name, so nothing de-duplicates and you get one block per slide per deck.
+_CREATION_ID = re.compile(rb'creationId[^>]*?\bid="\{?([0-9A-Fa-f-]{8,})\}?"')
+_A_T_BYTES = re.compile(rb'<a:t(?:\s[^>]*)?>(.*?)</a:t>', re.DOTALL)
+_OFF = re.compile(rb'<a:off\b[^>]*?\bx="(-?\d+)"[^>]*?\by="(-?\d+)"')
+_EXT = re.compile(rb'<a:ext\b[^>]*?\bcx="(\d+)"[^>]*?\bcy="(\d+)"')
+
+
+def slide_identity(xml_bytes, notes=None):
+    """-> (key, how). The same slide in two decks must give the same key.
+
+    `notes` collects the reason a stronger method was unavailable, so the tool
+    can say why it fell back instead of quietly producing a useless library.
+    """
+    cids = _CREATION_ID.findall(xml_bytes)
+    if cids:
+        return ("cid", frozenset(c.decode("ascii").lower() for c in cids)), "creationId"
+
     if pf is not None:
         try:
             data = pf.parse_slide_xml(xml_bytes)
-            cids = data.get("shape_creation_ids") or []
-            if cids:
-                return ("cid", frozenset(cids)), "creationId"
             geom = data.get("geom_sig") or frozenset()
             text = re.sub(r"\s+", " ", (data.get("text") or "")).strip().lower()
             if geom or text:
                 return ("struct", geom, text), "structure+text"
-        except Exception:
-            pass
+        except Exception as exc:
+            if notes is not None:
+                notes["parse_failed"] = "%s: %s" % (type(exc).__name__, exc)
+    elif notes is not None:
+        notes.setdefault("no_forensics", "pptx_forensics could not be imported")
+
+    # last resort before hashing everything: geometry alone is token-invariant,
+    # so a slide still matches across decks even though its text differs
+    geom = frozenset(zip(_OFF.findall(xml_bytes), _EXT.findall(xml_bytes)))
+    if geom:
+        return ("geom", geom), "geometry"
+
     body = re.sub(rb"\s+", b" ", xml_bytes)
     return ("sha", hashlib.sha1(body).hexdigest()), "bytes"
 
@@ -108,14 +136,38 @@ class MasterBuilder:
         return name
 
     def add_deduped(self, kind, data, ctype, ext="xml"):
-        """-> (part name, was_new). Identical content is stored once."""
-        digest = hashlib.sha1(data).hexdigest()
+        """-> (part name, was_new). Identical content is stored once.
+
+        XML parts are hashed with their creationId GUIDs and revision ids
+        stripped: PowerPoint stamps fresh ones into a master or layout every
+        time it saves, so two decks from one template carry masters that are
+        identical in every way that matters and differ byte for byte. Hashing
+        the raw bytes keeps all seventy. The bytes we *store* are the original,
+        untouched - normalisation only decides sameness.
+        """
+        digest = hashlib.sha1(_normalise_for_hash(data) if ext == "xml"
+                              else data).hexdigest()
         if digest in self.by_hash:
             return self.by_hash[digest], False
         name = self._next(kind, ext)
         self.by_hash[digest] = name
         self.add(name, data, ctype)
         return name, True
+
+
+_VOLATILE = [
+    re.compile(rb'<[a-zA-Z0-9]+:creationId[^>]*/>'),
+    re.compile(rb'\s(?:val|id)="\{[0-9A-Fa-f-]{36}\}"'),
+    re.compile(rb'\srevision="\d+"'),
+    re.compile(rb'\smodId="\d+"'),
+]
+
+
+def _normalise_for_hash(data):
+    """Strip the bits PowerPoint re-stamps on every save, for comparison only."""
+    for pattern in _VOLATILE:
+        data = pattern.sub(b"", data)
+    return data
 
 
 def _abs_target(part):
@@ -142,6 +194,7 @@ class Merger:
         self.order = []            # identities, in first-seen order
         self.verbose = verbose
         self.id_methods = {}
+        self.id_notes = {}         # why a stronger identity was unavailable
         self.base_presentation = None
         self.base_ct = ""
         self.masters = []          # output master parts, in order added
@@ -264,7 +317,7 @@ class Merger:
                             break
             for part in lib.slide_parts:
                 raw = lib.read_bytes(part)
-                identity, how = slide_identity(raw)
+                identity, how = slide_identity(raw, self.id_notes)
                 self.id_methods[how] = self.id_methods.get(how, 0) + 1
                 if identity in self.seen:
                     self.seen[identity]["decks"].append(label)
@@ -509,6 +562,9 @@ def tokenise(merger, payloads, token_map=None):
         new_xml, hits, formats = tokenise_part(xml, reps)
         if hits:
             merger.out.parts[part] = new_xml.encode("utf-8")
+            # the title is what blocks.json records; take it from the text as
+            # it will actually be, not as it was before substitution
+            rec["title"] = slide_title(new_xml)
         for literal, n in hits.items():
             totals[literal] = totals.get(literal, 0) + n
         for field, seen_fmts in formats.items():
@@ -640,6 +696,47 @@ def load_payloads(folder, deck_labels):
     return paired, unpaired
 
 
+# ---------------------------------------------------------------- probe
+def probe(decks, limit=2):
+    """Report how slides would be identified, without merging anything.
+
+    Cheap to run and answers the only question that matters before a merge: are
+    the creationIds there? If they are not, every deck's copy of a slide looks
+    different (its client name differs) and the merge de-duplicates nothing.
+    """
+    print("Probing %d deck(s)" % min(len(decks), limit))
+    overall, notes = {}, {}
+    for path in decks[:limit]:
+        label = os.path.splitext(os.path.basename(path))[0]
+        try:
+            with Library(path) as lib:
+                counts = {}
+                for part in lib.slide_parts:
+                    _key, how = slide_identity(lib.read_bytes(part), notes)
+                    counts[how] = counts.get(how, 0) + 1
+                    overall[how] = overall.get(how, 0) + 1
+                print("  %-30s %3d slides: %s"
+                      % (label[:30], len(lib.slide_parts),
+                         ", ".join("%s=%d" % kv for kv in sorted(counts.items()))))
+        except Exception as exc:
+            print("  %-30s could not be read: %s: %s"
+                  % (label[:30], type(exc).__name__, exc))
+
+    print("")
+    for reason in notes.values():
+        print("  ! %s" % reason)
+    if overall.get("creationId"):
+        print("  creationIds found - slides will match across decks reliably.")
+        return 0
+    print("  ! NO creationIds found in these decks.")
+    print("    Every deck's copy of a slide differs by its client name, so")
+    print("    matching falls back to %s and the merge will de-duplicate"
+          % ", ".join(sorted(overall)))
+    print("    little or nothing. Merging anyway produces one block per slide")
+    print("    per deck - a huge library that is not a template.")
+    return 1
+
+
 # ---------------------------------------------------------------- cli
 def collect_decks(inputs):
     decks = []
@@ -669,10 +766,17 @@ def main(argv=None):
                     help="put {{placeholders}} back where the payload's values "
                          "were substituted (needs --payloads)")
     ap.add_argument("--overwrite", action="store_true")
+    ap.add_argument("--allow-weak-identity", action="store_true",
+                    help="merge even when slides cannot be matched across decks "
+                         "(the result will barely de-duplicate)")
+    ap.add_argument("--probe", action="store_true",
+                    help="report how slides would be identified, then stop")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args(argv)
 
     decks = collect_decks(args.decks)
+    if args.probe:
+        return probe(decks)
     if not decks:
         ap.error("no .pptx found in %s" % ", ".join(args.decks))
 
@@ -706,6 +810,25 @@ def main(argv=None):
             ap.error("--tokenise needs --payloads: the payload is what tells us "
                      "which literals were substituted values")
         token_report = tokenise(merger, payloads)
+
+    # Stop before writing 80MB of near-duplicates. If nothing matched across
+    # decks, the merge has not merged anything and the output is not a template.
+    weak = not merger.id_methods.get("creationId")
+    collapsed = sum(len(d) for _p, _t, d, _h in merger.blocks())
+    if weak and collapsed and len(merger.order) > 0.8 * collapsed             and not args.allow_weak_identity:
+        print("")
+        print("STOPPING: %d slides across the decks produced %d blocks - almost"
+              % (collapsed, len(merger.order)))
+        print("nothing matched, so this is not a merge. Slides were identified by:")
+        for how, n in sorted(merger.id_methods.items(), key=lambda kv: -kv[1]):
+            print("    %-16s %d" % (how, n))
+        for reason in merger.id_notes.values():
+            print("    ! %s" % reason)
+        print("")
+        print("Run `--probe` on a couple of decks to see why. Pass")
+        print("--allow-weak-identity to merge anyway.")
+        shutil.rmtree(folder, ignore_errors=True)
+        return 2
 
     out_pptx = os.path.join(folder, "library.pptx")
     merger.write(out_pptx)

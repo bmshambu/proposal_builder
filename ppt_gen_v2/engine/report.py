@@ -365,6 +365,33 @@ def _check_sample_build(rep, template, answers, validator):
 
 # ---------------------------------------------------------------- markdown
 _LABEL = {ERROR: "Error", WARNING: "Warning", NOTE: "Note"}
+_GROUP_SHOWN = 15          # individual entries listed before "... and N more"
+
+
+def _grouped(items):
+    """[(code, [findings])] — same code collapses into one entry, worst first."""
+    order, groups = [], {}
+    for finding in sorted(items, key=lambda x: x.code):
+        if finding.code not in groups:
+            groups[finding.code] = []
+            order.append(finding.code)
+        groups[finding.code].append(finding)
+    return [(code, groups[code]) for code in order]
+
+
+def _shared_message(group):
+    """A heading for several findings that share a code."""
+    messages = {f.message for f in group}
+    if len(messages) == 1:
+        return group[0].message
+    # they differ only by which slide they name; keep the common opening words
+    words = [m.split() for m in sorted(messages)]
+    common = []
+    for parts in zip(*words):
+        if len(set(parts)) != 1:
+            break
+        common.append(parts[0])
+    return " ".join(common).rstrip(" :,-") or group[0].code.replace("-", " ")
 
 
 def _bytes(n):
@@ -433,10 +460,12 @@ def to_markdown(rep, include_blocks=True):
             ("Size", _bytes(f.get("library_bytes"))),
             ("Slides", f.get("slides")),
             ("Blocks", f.get("blocks")),
-            ("Masters / layouts", "%s / %s" % (f.get("masters"), f.get("layouts"))),
+            ("Masters / layouts",
+             ("%s / %s" % (f["masters"], f["layouts"])) if "masters" in f else None),
             ("Media files", f.get("media")),
-            ("Placeholders used / bound", "%s / %s"
-             % (f.get("placeholders_used"), f.get("placeholders_bound")))]
+            ("Placeholders used / bound",
+             ("%s / %s" % (f["placeholders_used"], f["placeholders_bound"]))
+             if "placeholders_used" in f else None)]
     if f.get("merged_from_decks"):
         rows.append(("Merged from", "%d decks" % f["merged_from_decks"]))
     if f.get("sample_slides") is not None:
@@ -467,16 +496,40 @@ def to_markdown(rep, include_blocks=True):
             continue
         out.append("## %ss (%d)" % (_LABEL[level], len(items)))
         out.append("")
-        for finding in sorted(items, key=lambda x: x.code):
-            out.append("### %s" % finding.message)
+        for code, group in _grouped(items):
+            if len(group) == 1:
+                finding = group[0]
+                out.append("### %s" % finding.message)
+                out.append("")
+                meta = "`%s`" % code
+                if finding.where:
+                    meta += " - %s" % finding.where
+                out.append(meta)
+                out.append("")
+                if finding.detail:
+                    out.append(str(finding.detail))
+                    out.append("")
+                continue
+
+            # One slide with a problem is a finding; a hundred with the same
+            # problem is one finding with a list. Reports where the same
+            # sentence repeats 136 times are unreadable, and the repetition
+            # hides everything else.
+            out.append("### %s (%d occurrences)" % (_shared_message(group), len(group)))
             out.append("")
-            meta = "`%s`" % finding.code
-            if finding.where:
-                meta += " - %s" % finding.where
-            out.append(meta)
+            out.append("`%s`" % code)
             out.append("")
-            if finding.detail:
-                out.append(str(finding.detail))
+            for finding in group[:_GROUP_SHOWN]:
+                line = "- %s" % finding.message
+                if finding.where:
+                    line += " (%s)" % finding.where
+                out.append(line)
+            if len(group) > _GROUP_SHOWN:
+                out.append("- ... and %d more" % (len(group) - _GROUP_SHOWN))
+            out.append("")
+            detail = next((f.detail for f in group if f.detail), None)
+            if detail:
+                out.append(str(detail))
                 out.append("")
 
     # -- blocks -------------------------------------------------------
