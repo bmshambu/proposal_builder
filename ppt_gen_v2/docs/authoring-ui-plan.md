@@ -235,6 +235,35 @@ So the mockup now:
 mockup falls back to synthetic data when the file is absent, so a fresh clone
 still opens.
 
+### 4. Check - "does this still match Templafy?"
+
+v1's `diff_decks.py`, given a screen. Two decks in, one verdict out:
+
+- **Two slots** - the deck this tool built, and the deck Templafy generated -
+  plus a second route that runs the whole set, every payload against its deck,
+  which is what `build.py verify` already does.
+- A **verdict banner** coloured by outcome, then the findings in the order they
+  cost you: wrong slides selected (a rules fix), slides in the wrong place
+  (drag the named block), text differences (usually an unbound placeholder).
+- **How the slides were paired** is shown, not hidden. The reader needs to know
+  whether a report rests on exact creationIds or on geometry before deciding
+  how much of it to believe.
+- Slides Templafy regenerates per deck are **counted separately**, with the
+  reason on screen, rather than reported as errors.
+- Both files are read locally. Nothing is uploaded, and the screen says so,
+  because "upload" is the word that makes people hesitate over a client deck.
+
+The screen renders whatever `compare()` returns and assumes nothing about which
+matching method won - the demo library has no creationIds and comes back
+`structural`, while the firm's decks come back `creationId`. A screen with three
+hardcoded method names would have been wrong on its first real run.
+
+`tools/make_ui_check_samples.py` builds two decks from the **synthetic demo
+template** and emits the real comparison for the screen to render. Unlike the
+payload catalogue this is committed, because nothing in the demo is
+confidential - and a mockup that invents its own results is only testing the
+imagination of whoever drew it.
+
 ## The risk, stated plainly
 
 Inference had an oracle: 70 decks Templafy really produced. Hand-authored rules

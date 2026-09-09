@@ -253,6 +253,50 @@ main{padding:16px 18px 30vh}
 .notice.ok{background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok-line)}
 .notice b{display:block;margin-bottom:2px}
 
+/* -------------------------------------------------------------- check */
+.pair{display:grid;grid-template-columns:1fr auto 1fr;gap:14px;align-items:center}
+.vs{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+.slot-lab{font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px;
+  text-transform:uppercase;letter-spacing:.04em}
+.dropzone.sm{padding:16px 14px}
+.dropzone.sm .dz-main{font-size:13.5px}
+.btn.linky{border:none;background:none;color:var(--accent);padding:0;
+  text-decoration:underline}
+.pair-acts{margin-top:13px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.or{color:var(--muted);font-size:12px}
+.hint2{margin-left:auto;font-size:12px;color:var(--muted);display:flex;
+  align-items:center;gap:6px}
+
+.verdict{padding:14px 16px;display:flex;align-items:center;gap:13px;
+  border-bottom:1px solid var(--line);flex-wrap:wrap}
+.verdict .big{font-size:16px;font-weight:600}
+.verdict.ok{background:var(--ok-soft);color:var(--ok)}
+.verdict.warn{background:var(--warn-soft);color:var(--warn)}
+.verdict.bad{background:var(--bad-soft);color:var(--bad)}
+.verdict .files{margin-left:auto;font-size:12px;font-family:var(--mono);opacity:.8}
+
+.finding{border-bottom:1px solid var(--line);padding:12px 16px}
+.finding:last-child{border-bottom:none}
+.finding h3{font-size:12.5px;margin-bottom:8px;display:flex;gap:8px;
+  align-items:center}
+.finding h3 .n{background:var(--chip-bg);color:var(--muted);border-radius:20px;
+  padding:1px 8px;font-size:11px;font-weight:600}
+.finding .why{color:var(--muted);font-size:12.5px;font-weight:400;margin-left:2px}
+.dl{display:flex;flex-direction:column;gap:6px}
+.di{display:flex;gap:10px;align-items:baseline;font-size:12.5px;
+  border:1px solid var(--line);border-radius:6px;padding:7px 10px;
+  background:var(--panel-2)}
+.di .k{font-family:var(--mono);font-size:11.5px;color:var(--muted);
+  white-space:nowrap}
+.di .b{font-weight:600;white-space:nowrap}
+.di .p{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:5px}
+.seg div{font-size:12.5px;padding:5px 9px;border-radius:5px}
+.seg .mine{background:var(--bad-soft);color:var(--bad)}
+.seg .theirs{background:var(--ok-soft);color:var(--ok)}
+.foot{padding:12px 16px;color:var(--muted);font-size:12.5px;
+  border-top:1px solid var(--line)}
+
 table{width:100%;border-collapse:collapse}
 th,td{text-align:left;padding:9px 14px;border-bottom:1px solid var(--line);
   vertical-align:middle}
@@ -278,13 +322,14 @@ td.used{color:var(--muted);font-size:12.5px;white-space:nowrap}
     <button data-tab="library" class="on">1 &middot; Library</button>
     <button data-tab="rules">2 &middot; Rules</button>
     <button data-tab="mapping">3 &middot; Mapping</button>
+    <button data-tab="check">4 &middot; Check</button>
   </nav>
   <span class="spacer"></span>
   <button class="btn theme" id="theme-btn" title="Light / dark / follow the system">
     <span class="dot"></span><span id="theme-label">System</span></button>
   <span class="mock" id="source-badge">MOCKUP</span>
   <button class="btn">Build test deck</button>
-  <button class="btn">Check against Templafy</button>
+  <button class="btn" data-goto="check">Check against Templafy</button>
   <button class="btn primary">Save rules</button>
 </header>
 
@@ -357,6 +402,47 @@ td.used{color:var(--muted);font-size:12.5px;white-space:nowrap}
   </div>
 </section>
 
+<!-- ============================================================== CHECK
+     v1's diff, given a screen. Two decks in, one verdict out. This is the
+     only objective answer available once rules are authored by hand rather
+     than inferred, so it gets a screen rather than a log line. -->
+<section class="screen" id="screen-check">
+
+  <div class="panel">
+    <h2>Compare two decks
+      <span class="hint">nothing is uploaded anywhere - both files are read on
+        this machine</span></h2>
+    <div class="pad">
+      <div class="pair">
+        <div class="slot" data-slot="ours">
+          <div class="slot-lab">Our deck</div>
+          <div class="dropzone sm"><div class="dz-icon">&#8681;</div>
+            <div class="dz-main">Drop the deck this tool built</div>
+            <div class="dz-sub">or <button class="btn linky">choose a file</button></div>
+          </div>
+        </div>
+        <div class="vs">vs</div>
+        <div class="slot" data-slot="templafy">
+          <div class="slot-lab">Templafy's deck</div>
+          <div class="dropzone sm"><div class="dz-icon">&#8681;</div>
+            <div class="dz-main">Drop the deck Templafy generated</div>
+            <div class="dz-sub">or <button class="btn linky">choose a file</button></div>
+          </div>
+        </div>
+      </div>
+      <div class="pair-acts">
+        <button class="btn primary" id="run-check">Compare</button>
+        <span class="or">or</span>
+        <button class="btn">Run the whole set &mdash; every payload and its deck</button>
+        <span class="hint2" id="sample-wrap">showing a sample result:
+          <select id="sample"></select></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" id="check-result"></div>
+</section>
+
 </main>
 
 <!-- Collapsed by default: the slides are what an author is judging, and an
@@ -380,6 +466,10 @@ td.used{color:var(--muted);font-size:12.5px;white-space:nowrap}
      The file is gitignored: the payloads it is built from are confidential.
      Absent, the synthetic fallback below is used and the page still opens. -->
 <script src="catalogue.js"></script>
+<!-- Real verify.compare() output from the synthetic demo template. Committed,
+     unlike the catalogue: nothing in the demo is confidential, and it keeps
+     the Check screen honest about what the engine actually returns. -->
+<script src="check_samples.js"></script>
 <script>
 /* ------------------------------------------------------- synthetic fallback */
 const FALLBACK = {
@@ -763,6 +853,101 @@ function renderInspect(){
     firm template imports untouched and can be replaced at any time.`;
 }
 
+/* ------------------------------------------------------------------ check
+   Renders whatever verify.compare() returns. Nothing here assumes which
+   matching method won: the demo library has no creationIds and comes back
+   "structural", the firm's decks come back "creationId", and a screen that
+   hardcoded three method names would have been wrong on the first real run. */
+const CHECKS = window.CHECK_SAMPLES || [];
+
+function renderCheck(i){
+  const box = document.getElementById("check-result");
+  const c = CHECKS[i];
+  if(!c){ box.innerHTML = `<div class="pad" style="color:var(--muted)">
+    Drop both decks above and press Compare.</div>`; return; }
+  const r = c.result;
+
+  const tone = r.exact ? "ok" : (r.selection_ok ? "warn" : "bad");
+  const parts = [];
+  parts.push(`<div class="verdict ${tone}">
+    <span class="big">${esc(r.verdict)}</span>
+    <span>${r.our_slides} slides ours &middot; ${r.templafy_slides} Templafy's
+      &middot; ${r.matched} matched</span>
+    <span class="files">${esc(c.ours)} vs ${esc(c.templafy)}</span></div>`);
+
+  /* how the slides were paired - the reader needs to know how much to trust
+     the rest of the report */
+  const methods = Object.entries(r.by_method || {});
+  parts.push(`<div class="finding"><h3>How the slides were paired
+    <span class="why">strongest signal available, one slide to one slide</span></h3>
+    <div class="dl">${methods.map(([m,n]) =>
+      `<div class="di"><span class="b">${n}</span>
+        <span class="k">${esc(m)}</span>
+        <span class="p">${m === "creationId"
+          ? "exact - Templafy kept the shape ids"
+          : m === "structural"
+          ? "layout and geometry - survives placeholder filling"
+          : "text overlap - only meaningful on static slides"}</span></div>`)
+      .join("") || `<div class="di"><span class="p">nothing matched</span></div>`}
+    </div></div>`);
+
+  if(r.missing.length || r.extra.length)
+    parts.push(section("Wrong slides selected",
+      r.missing.length + r.extra.length,
+      "the rules put a different set of slides in the deck - this is the "
+      + "failure that matters, and it is a rules fix",
+      r.missing.map(s => item("only in Templafy's", "#" + s.index, s.preview))
+        .concat(r.extra.map(s => item("only in ours", "#" + s.index, s.preview)))));
+
+  if((r.displaced || []).length)
+    parts.push(section("Slides in the wrong place", r.out_of_order,
+      "the right slides, ordered differently - drag the named block on the "
+      + "Rules screen",
+      r.displaced.map(d => item(d.block || "unnamed block",
+        `Templafy #${d.templafy_index} → ours #${d.our_index}`, d.preview))));
+
+  if(r.text_differs.length)
+    parts.push(`<div class="finding"><h3>Text differences
+      <span class="n">${r.text_differs.length}</span>
+      <span class="why">same slide, different words - usually an unbound
+        placeholder or the wrong binding</span></h3>
+      <div class="dl">${r.text_differs.map(t => `
+        <div class="di" style="display:block">
+          <span class="k">slide #${t.ours_index}</span>
+          ${(t.segments || []).map(s => `<div class="seg">
+            <div class="mine">ours: ${esc(s.ours || "(nothing)")}</div>
+            <div class="theirs">Templafy: ${esc(s.templafy || "(nothing)")}</div>
+          </div>`).join("")}
+        </div>`).join("")}</div></div>`);
+
+  if(r.data_driven)
+    parts.push(section("Regenerated per deck", r.data_driven,
+      "Templafy rebuilds these (fees, partner names, RFP tables) with fresh "
+      + "shape ids, so they cannot be paired by identity even when selection "
+      + "is perfect. Counted separately rather than called an error.", []));
+
+  if(r.exact)
+    parts.push(`<div class="finding"><h3>No differences
+      <span class="why">same slides, same order, same text</span></h3></div>`);
+
+  parts.push(`<div class="foot">Slides are matched by shape creationId, then by
+    layout and geometry, then by text - whichever is strongest. Both files are
+    read locally; neither leaves this machine.</div>`);
+  box.innerHTML = parts.join("");
+}
+
+function section(title, n, why, items){
+  return `<div class="finding"><h3>${esc(title)}
+    ${n ? `<span class="n">${n}</span>` : ""}
+    <span class="why">${esc(why)}</span></h3>
+    ${items.length ? `<div class="dl">${items.join("")}</div>` : ""}</div>`;
+}
+function item(bold, key, preview){
+  return `<div class="di"><span class="b">${esc(bold)}</span>
+    <span class="k">${esc(key)}</span>
+    <span class="p">${esc(preview || "")}</span></div>`;
+}
+
 /* ---------------------------------------------------------------- library */
 function renderLibrary(){
   renderUpload(); renderInspect();
@@ -792,6 +977,21 @@ function showTab(tab){
 }
 document.querySelectorAll(".tabs button").forEach(btn =>
   btn.onclick = () => showTab(btn.dataset.tab));
+/* the header button is the way most people will get here */
+document.querySelectorAll("[data-goto]").forEach(b =>
+  b.onclick = () => showTab(b.dataset.goto));
+
+/* ------------------------------------------------------- check: samples */
+(function(){
+  const sel = document.getElementById("sample");
+  const wrap = document.getElementById("sample-wrap");
+  if(!CHECKS.length){ wrap.hidden = true; renderCheck(-1); return; }
+  sel.innerHTML = CHECKS.map((c,i) =>
+    `<option value="${i}">${esc(c.label)} — ${esc(c.note)}</option>`).join("");
+  sel.onchange = () => renderCheck(+sel.value);
+  document.getElementById("run-check").onclick = () => renderCheck(+sel.value);
+  renderCheck(0);
+})();
 
 /* keep the page clear of the bar, whatever height it currently is */
 function fitMain(){
