@@ -516,6 +516,76 @@ class TestTemplates(EngineTestCase):
         self.assertFalse(os.path.exists(os.path.join(self.root, "broken")))
 
     # -- maintenance ------------------------------------------------------
+    # -- reconciling after the deck is rewritten --------------------------
+    def _renumber(self, tpl, rename):
+        """Rewrite the sidecar's keys, as if the parts had been renumbered."""
+        raw = tpl.raw_block_map
+        tpl.write_block_map({rename(part): entry for part, entry in raw.items()})
+
+    def test_reconcile_does_nothing_when_the_deck_has_not_moved(self):
+        tpl = Template(self.imported()["folder"])
+        before = open(tpl.blocks_path, encoding="utf-8").read()
+        report = tpl.reconcile_blocks()
+        self.assertFalse(report["changed"])
+        self.assertEqual(report["unmatched"], [])
+        self.assertEqual(report["vanished"], [])
+        self.assertEqual(open(tpl.blocks_path, encoding="utf-8").read(), before,
+                         "a no-op must not rewrite the file")
+
+    def test_reconcile_rekeys_after_a_repair_renumbers_the_slides(self):
+        """PowerPoint rewrites part names when it repairs a deck. The sidecar
+        is keyed by those names, so every id would end up on the wrong slide -
+        silently, since nothing about it is invalid."""
+        folder = self.imported()["folder"]
+        tpl = Template(folder)
+        expected = dict(tpl.block_map)               # part -> id, before
+        self._renumber(tpl, lambda p: p.replace("slide", "old"))
+
+        report = Template(folder).reconcile_blocks()
+        self.assertTrue(report["changed"])
+        self.assertEqual(len(report["moved"]), len(expected))
+        self.assertEqual(report["unmatched"], [])
+        self.assertEqual(report["vanished"], [])
+        self.assertEqual(Template(folder).block_map, expected,
+                         "every id must land back on the slide it named")
+
+    def test_reconciled_ids_actually_resolve_in_the_library(self):
+        folder = self.imported()["folder"]
+        tpl = Template(folder)
+        self._renumber(tpl, lambda p: p.replace("slide", "old"))
+        Template(folder).reconcile_blocks()
+        with Template(folder).open_library() as lib:
+            self.assertTrue(all(b.source == "map" for b in lib.ordered()))
+
+    def test_reconcile_reports_what_it_cannot_place(self):
+        """Better to say a block is lost than to guess a slide for it."""
+        folder = self.imported()["folder"]
+        tpl = Template(folder)
+        raw = tpl.raw_block_map
+        part = sorted(raw)[0]
+        raw["gone.xml"] = {"id": "a_deleted_block",
+                           "title": "A slide that is no longer here"}
+        raw.pop(part)
+        tpl.write_block_map(raw)
+
+        report = Template(folder).reconcile_blocks()
+        lost = [bid for bid, _was in report["unmatched"]]
+        self.assertIn("a_deleted_block", lost)
+        self.assertIn(part, report["vanished"],
+                      "a slide nothing points at should be reported too")
+        # The entry stays in the file rather than being deleted — a retitled
+        # slide also lands here, and silently dropping a curated id would be
+        # worse than leaving one that points nowhere. What matters is that it
+        # is inert: it must never attach itself to some other slide.
+        with Template(folder).open_library() as lib:
+            self.assertNotIn("a_deleted_block", lib.blocks,
+                             "an unplaceable id must not land on a real slide")
+
+    def test_reconcile_survives_a_template_with_no_sidecar(self):
+        """The demo names its blocks with markers, so there is nothing to key."""
+        report = Template(DEMO).reconcile_blocks()
+        self.assertFalse(report["changed"])
+
     def test_rename_updates_the_sidecar_and_the_rules_together(self):
         r = self.imported()
         tpl = Template(r["folder"])

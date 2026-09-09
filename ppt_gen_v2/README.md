@@ -34,6 +34,7 @@ cd ppt_gen_v2
 python build.py list                     # registered templates
 python build.py inspect demo             # blocks, where their ids come from, rules check
 python build.py preview demo             # render every block to an SVG contact sheet
+python build.py check   demo --redact    # write report.md describing any problems
 python build.py check   demo             # write report.md describing any problems
 
 # build two decks from ONE library and two answer sets
@@ -105,6 +106,21 @@ templates/<name>/
   rules.json          which blocks a given answer set produces
   data_sources.json   stubs for external systems (optional)
 ```
+
+### After the library deck is rewritten
+
+`blocks.json` is keyed by slide *part name*, so anything that renumbers parts —
+a designer reordering slides, or PowerPoint rewriting the package during a
+repair — leaves the ids naming the wrong slides. Nothing errors: the rules just
+quietly pull the wrong content, which is the worst way to be wrong.
+
+```bash
+python build.py reconcile firm      # re-key by the titles recorded with each id
+python build.py preview firm        # then look
+```
+
+It reports what moved, and flags anything it cannot place rather than guessing.
+`check` raises `sidecar-needs-reconcile` when this is due.
 
 ### Where a block id comes from
 

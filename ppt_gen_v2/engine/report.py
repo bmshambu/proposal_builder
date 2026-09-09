@@ -156,9 +156,21 @@ def _check_blocks(rep, lib, keep):
                 "rule that refers to them. Fix with `build.py rename`, or add a "
                 "{{block:id}} marker.\n\nAffected: " + ", ".join(loose[:25]))
 
-    for line in lib.map_drift():
+    drift = lib.map_drift()
+    for line in drift:
         rep.add(WARNING, "sidecar-drift",
                 "A slide changed since its id was recorded", keep(line))
+    if drift:
+        # The sidecar is keyed by part name, so a deck someone reordered - or
+        # that PowerPoint rewrote during a repair - leaves ids on the wrong
+        # slides. Nothing is invalid, so nothing else will say so.
+        rep.add(WARNING, "sidecar-needs-reconcile",
+                "%d slide(s) no longer match the sidecar" % len(drift),
+                "If the deck was reordered or repaired, the block ids are on "
+                "the wrong slides and every rule will pull the wrong content."
+                "\n\nRe-key it, then look at the result:\n\n"
+                "    python build.py reconcile <template>\n"
+                "    python build.py preview <template>")
 
     empty = [b.id for b in lib.ordered() if not b.title]
     if empty:

@@ -144,17 +144,19 @@ class Template:
         def entry_title(e):
             return e.get("title") if isinstance(e, dict) else None
 
-        taken, moved, unmatched = set(), [], []
-        resolved = {}
-        # 1. a part that still exists and still has its recorded title is settled
         by_part = dict(current)
+        taken, consumed = set(), set()      # slides claimed; sidecar entries used
+        moved, unmatched, resolved = [], [], {}
+
+        # 1. a part that still exists and still has its recorded title is settled
         for part, e in raw.items():
             if part in by_part and entry_title(e) == by_part[part]:
                 resolved[part] = e
                 taken.add(part)
+                consumed.add(part)
         # 2. anything left is matched on its recorded title, in deck order
         for part, e in raw.items():
-            if part in resolved:
+            if part in consumed:
                 continue
             title = entry_title(e)
             hit = next((p for p, t in current
@@ -162,6 +164,7 @@ class Template:
             if hit:
                 resolved[hit] = e
                 taken.add(hit)
+                consumed.add(part)
                 moved.append((_entry_id(e), part, hit))
             else:
                 unmatched.append((_entry_id(e), part))
@@ -169,6 +172,14 @@ class Template:
         vanished = [p for p, _t in current if p not in taken]
         changed = bool(moved)
         if changed:
+            # An entry we could not place is carried over rather than deleted:
+            # a slide someone retitled lands here too, and silently dropping a
+            # curated id would be worse than reporting one that points nowhere.
+            # It is inert either way — its key names no slide, so it can never
+            # attach itself to the wrong one.
+            for part, entry in raw.items():
+                if part not in consumed:
+                    resolved.setdefault(part, entry)
             self.write_block_map(resolved)
         return {"moved": moved, "unmatched": unmatched, "vanished": vanished,
                 "changed": changed}
