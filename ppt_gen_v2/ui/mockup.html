@@ -370,12 +370,37 @@ const esc = (s) => String(s).replace(/[&<>"]/g,
    the part that tells an author what the rule does. */
 const label = (field) => String(field).replace(/_/g, " ").trim();
 
+/* ------------------------------------------------------------------ dates
+   Payloads store a date as YYYYMMDD; <input type=date> speaks YYYY-MM-DD only.
+   Convert at the edges so what is *stored* stays exactly what the payload
+   holds - a picker that writes a different format would break every comparison
+   in rules.py while looking friendlier. */
+const isDate = (field) => (FIELDS[field] || {}).kind === "date";
+function toISO(raw){
+  const s = String(raw ?? "").replace(/\D/g, "");
+  return s.length === 8 ? `${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}` : "";
+}
+const fromISO = (iso) => String(iso || "").replace(/\D/g, "");
+const MONTHS = ["January","February","March","April","May","June","July",
+                "August","September","October","November","December"];
+function humanDate(raw){                    /* mirrors bindings.date_formats */
+  const s = String(raw ?? "").replace(/\D/g, "");
+  if(s.length !== 8) return String(raw ?? "");
+  const m = +s.slice(4,6);
+  if(m < 1 || m > 12) return String(raw);
+  return `${MONTHS[m-1]} ${+s.slice(6,8)}, ${s.slice(0,4)}`;
+}
+/* the chip reads the date, rules.json keeps the raw value; the chip's tooltip
+   shows the exact text, so nothing is hidden */
+const showVal = (field, v) =>
+  isDate(field) ? humanDate(v) : JSON.stringify(v);
+
 function condText(when){
   if(!when) return {lab:"always", op:"", val:""};
   const f = label(when.field);
   if("exists" in when)  return {lab:f, op:"is", val:"answered"};
-  if("eq" in when)      return {lab:f, op:"is", val:JSON.stringify(when.eq)};
-  if("ne" in when)      return {lab:f, op:"is not", val:JSON.stringify(when.ne)};
+  if("eq" in when)      return {lab:f, op:"is", val:showVal(when.field, when.eq)};
+  if("ne" in when)      return {lab:f, op:"is not", val:showVal(when.field, when.ne)};
   if("in" in when)      return {lab:f, op:"is one of", val:when.in.join(", ")};
   if("not_in" in when)  return {lab:f, op:"is not one of", val:when.not_in.join(", ")};
   return {lab:f, op:"", val:""};
@@ -467,6 +492,9 @@ function valueControl(field, op, current){
   if(op === "in" || op === "not_in")
     return `<input type="text" data-v value="${esc([].concat(current||[]).join(", "))}"
               placeholder="comma-separated values">`;
+  if(spec.kind === "date")
+    return `<input type="date" data-v data-date value="${esc(toISO(current))}">
+            <span class="preview">${esc(humanDate(current) || "pick a date")}</span>`;
   const vals = spec.values || [];
   if(vals.length && vals.length <= 12)
     return `<select data-v>${vals.map(v =>
@@ -531,7 +559,9 @@ function renderTest(){
         <input type="checkbox" data-ans="${esc(f)}"${cur===true?" checked":""}>
         <span>${esc(label(f))}</span></label>`;
     const vals = spec.values || [];
-    const ctl = vals.length
+    const ctl = spec.kind === "date"
+      ? `<input type="date" data-ans="${esc(f)}" data-date value="${esc(toISO(cur))}">`
+      : vals.length
       ? `<select data-ans="${esc(f)}"><option value=""></option>${vals.map(v =>
           `<option${String(v)===String(cur)?" selected":""}>${esc(v)}</option>`).join("")}</select>`
       : `<input type="text" data-ans="${esc(f)}" value="${esc(cur??"")}"
@@ -745,6 +775,8 @@ document.addEventListener("click", (e) => {
       if(op === "exists") row.when = {field, exists:true};
       else if(op === "in" || op === "not_in")
         row.when = {field, [op]: vEl.value.split(",").map(s => s.trim()).filter(Boolean)};
+      else if(vEl.dataset.date !== undefined)
+        row.when = {field, [op]: fromISO(vEl.value)};   /* store the raw YYYYMMDD */
       else row.when = {field, [op]: parseVal(vEl.value)};
     }
     EDITING = null; redraw();
@@ -770,7 +802,9 @@ document.addEventListener("change", (e) => {
   }
   if(e.target.dataset.ans !== undefined){
     const el = e.target;
-    ANSWERS[el.dataset.ans] = el.type === "checkbox" ? el.checked : el.value;
+    ANSWERS[el.dataset.ans] = el.type === "checkbox" ? el.checked
+                            : el.dataset.date !== undefined ? fromISO(el.value)
+                            : el.value;
     renderDeck();
   }
 });

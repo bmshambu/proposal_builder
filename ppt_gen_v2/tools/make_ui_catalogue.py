@@ -105,6 +105,12 @@ def demo_blocks(fields):
     for field, spec in sorted(fields.items()):
         if not spec["varies"]:
             continue
+        # Client names are text that gets substituted into slides, not answers
+        # that pick them. A demo block conditioned on
+        # `FullClientName is "Umbrella Corporation"` would be nonsense dressed
+        # up as an example. They stay in the catalogue for the Mapping screen.
+        if "clientname" in field.lower().replace("_", ""):
+            continue
         bid = _slug(field)
         title = field.replace("_", " ").strip()
         if spec["kind"] == "bool":

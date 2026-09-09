@@ -137,6 +137,38 @@ from the slides, which are the thing the author is actually judging. The deck
 tally stays visible while collapsed, so the one number worth watching is never
 hidden behind a click.
 
+### Saving over rules that already exist
+
+Raised by the author, 2026-09-10, and to be honoured at wiring time (M2), not
+left to be discovered: **an author editing a template will usually be updating
+rules that already exist, not writing them from nothing.** The first save is the
+easy case and the one a prototype accidentally designs for.
+
+So saving is an explicit overwrite, not an implicit one:
+
+- **Say what is about to change before writing.** A short diff - slides added or
+  removed from the deck, conditions changed, order moved - so the author is
+  confirming a change rather than confirming a file write. `rules.json` is small
+  and ordered; diffing it is cheap.
+- **Back up every write**, timestamped, next to the file. Restoring a previous
+  version has to be possible without git, because the author is not a developer
+  and the template folder may not be a repo.
+- **Refuse to save rules that fail `check`.** A broken `rules.json` that
+  overwrote a working one is the worst outcome available here.
+- **Re-importing a library must not silently discard the rules.** Ids that still
+  exist keep their rules; ids that vanished are reported, not dropped. This is
+  the same drift `map_drift()` already detects, surfaced at the moment it
+  matters.
+- **One writer at a time.** Two authors editing one template is out of scope
+  while this is localhost, but the save should carry the version it was loaded
+  from and refuse a write that would clobber a newer one, rather than needing
+  that retrofitted once it is shared.
+
+Date answers are picked from a calendar, never typed, and are stored in the
+payload's own `YYYYMMDD` form - the picker converts at the edges. A control that
+wrote `2026-11-30` because it looked friendlier would break every comparison in
+`rules.py` while appearing to work.
+
 ### 3. Mapping - "where does each value come from?"
 
 You asked how to do this one. The proposal:
