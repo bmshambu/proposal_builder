@@ -10,6 +10,8 @@
     python build.py reconcile office                      # re-key blocks.json
     python build.py tokenise  office --payload p.json     # put {{placeholders}} back
     python build.py rules     office --payloads data/payloads  # re-propose rules
+    python build.py bind      office "{{X}}" --field X    # bind a placeholder
+    python build.py verify    office --decks d --payloads p   # match Templafy?
     python build.py make    office --answers a.json --out out/deck.pptx
 
 Adding a template is a file operation — drop a folder under templates/, or run
@@ -208,6 +210,83 @@ def cmd_tokenise(args):
     print("   python build.py check   %s" % tpl.name)
     print("   python build.py preview %s" % tpl.name)
     return 0
+
+
+# ---------------------------------------------------------------- bind
+def cmd_bind(args):
+    """Point a placeholder at the answer that fills it."""
+    tpl = resolve(args)
+    name = args.placeholder.strip()
+    if not name.startswith("{{"):
+        name = "{{%s}}" % name.strip("{} ")
+    rules = read_json(tpl.rules_path) if os.path.exists(tpl.rules_path) else {}
+    binding = {"from": "field", "field": args.field}
+    if args.format:
+        binding["format"] = args.format
+    rules.setdefault("placeholders", {})[name] = binding
+    with open(tpl.rules_path, "w", encoding="utf-8") as fh:
+        json.dump(rules, fh, indent=2, ensure_ascii=False)
+    print("Bound %s -> answers.%s%s"
+          % (name, args.field, " (%s)" % args.format if args.format else ""))
+
+    with tpl.open_library() as lib:
+        if name.strip("{} ") not in lib.all_placeholders():
+            print("  ! no slide uses %s - check the spelling" % name)
+    return 0
+
+
+# ---------------------------------------------------------------- verify
+def cmd_verify(args):
+    """Compare our decks against the ones Templafy produced.
+
+    Everything else checks a deck is valid. This checks it is *right* - same
+    slides, same order, for the same answers - against the only authority
+    there is.
+    """
+    from engine import verify as verifymod
+
+    tpl = resolve(args)
+    report = verifymod.verify(tpl, args.decks, args.payloads,
+                              limit=args.limit)
+    if not report["compared"]:
+        print("Nothing to compare - no deck could be paired with a payload.")
+        return 2
+
+    for row in report["results"]:
+        if row.get("error"):
+            print("  FAIL  %-28s %s" % (row["deck"], row["error"]))
+        elif row["exact"]:
+            print("  ok    %-28s %d slides" % (row["deck"], row["actual"]))
+        else:
+            bits = []
+            if row["missing"]:
+                bits.append("%d missing" % len(row["missing"]))
+            if row["extra"]:
+                bits.append("%d extra" % len(row["extra"]))
+            if row["reordered"]:
+                bits.append("order differs")
+            print("  DIFF  %-28s %d vs %d slides: %s"
+                  % (row["deck"], row["actual"], row["expected"],
+                     ", ".join(bits) or "?"))
+            if args.verbose:
+                for b in row["missing"][:8]:
+                    print("          missing %s" % b)
+                for b in row["extra"][:8]:
+                    print("          extra   %s" % b)
+
+    print("")
+    print("%d of %d deck(s) reproduce Templafy's exactly"
+          % (report["exact"], report["compared"]))
+    print("")
+    print("  ! This comparison is NOT yet trustworthy: on the synthetic")
+    print("    fixtures it twice reported a 5-slide build for a deck that is")
+    print("    provably 7, and the discrepancy is unexplained. Treat a")
+    print("    mismatch as a prompt to look, not as a verdict.")
+    if report["unpaired_decks"]:
+        print("  ! %d deck(s) had no payload: %s"
+              % (len(report["unpaired_decks"]),
+                 ", ".join(report["unpaired_decks"][:5])))
+    return 0 if report["exact"] == report["compared"] else 1
 
 
 # ---------------------------------------------------------------- rules
@@ -441,6 +520,21 @@ def main(argv=None):
                     help="the payload whose values are baked into these slides")
     tk.add_argument("--no-backup", action="store_true")
 
+    bd = sub.add_parser("bind", help="bind a placeholder to an answer field")
+    bd.add_argument("template")
+    bd.add_argument("placeholder")
+    bd.add_argument("--field", required=True)
+    bd.add_argument("--format", help="e.g. long_comma for dates")
+
+    vf = sub.add_parser("verify",
+                        help="compare our decks with Templafy's (UNVERIFIED - "
+                             "see engine/verify.py)")
+    vf.add_argument("template")
+    vf.add_argument("--decks", required=True)
+    vf.add_argument("--payloads", required=True)
+    vf.add_argument("--limit", type=int, help="only the first N payloads")
+    vf.add_argument("-v", "--verbose", action="store_true")
+
     ru = sub.add_parser("rules",
                         help="re-propose rules from provenance.json + payloads")
     ru.add_argument("template")
@@ -482,7 +576,8 @@ def main(argv=None):
                "rename": cmd_rename, "make": cmd_make,
                "preview": cmd_preview, "check": cmd_check,
                "reconcile": cmd_reconcile, "tokenise": cmd_tokenise,
-               "tokenize": cmd_tokenise, "rules": cmd_rules}[args.cmd]
+               "tokenize": cmd_tokenise, "rules": cmd_rules,
+               "bind": cmd_bind, "verify": cmd_verify}[args.cmd]
     try:
         return handler(args)
     except (AssemblyError, RulesError, LibraryError, TemplateError) as exc:
