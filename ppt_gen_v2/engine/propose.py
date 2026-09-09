@@ -18,6 +18,8 @@ import json
 import os
 import re
 
+from .library import Library
+
 
 def flatten(obj, prefix=""):
     out = {}
@@ -131,7 +133,89 @@ def derive_anchors(order, block_decks):
     return anchors
 
 
-def propose_from_provenance(template, payloads_dir):
+def recover_anchors(template, decks_dir):
+    """Read the original decks to learn where each block actually sat.
+
+    The library cannot tell us: a block a later deck introduced sits at the end
+    of it, wherever it sat in its own deck. Only the decks know the order, so
+    when `provenance.json` predates the merge recording anchors, this recovers
+    them — without rebuilding the library, which is the part that is hard to
+    get right and easy to break.
+
+    Slides are matched to blocks the same way the merge matched them across
+    decks: by their shape creationIds.
+    """
+    import glob
+    from .identity import geometry_key, slide_identity
+
+    # Two keys, because tokenising rewrites the very text a slide is
+    # recognised by: creationIds where the decks have them, shape geometry
+    # otherwise. Geometry does not move when text is substituted.
+    with template.open_library() as lib:
+        by_identity, geo_seen = {}, {}
+        for block in lib.ordered():
+            raw = lib.read_bytes(block.part)
+            key, _how = slide_identity(raw)
+            by_identity.setdefault(key, block.id)
+            geo = geometry_key(raw)
+            if geo:
+                geo_seen.setdefault(geo, []).append(block.id)
+    # Geometry is a fallback, not an identity: slides built from one layout
+    # share it. Keep only the keys that name exactly one block - a wrong match
+    # here would put a block in the wrong place, quietly.
+    by_geometry = {geo: ids[0] for geo, ids in geo_seen.items() if len(ids) == 1}
+
+    decks = sorted(glob.glob(os.path.join(str(decks_dir), "*.pptx")))
+    decks = [d for d in decks if not os.path.basename(d).startswith("~$")]
+    orders, unreadable = [], []
+    matched = unmatched = 0
+    for path in decks:
+        try:
+            with Library(path) as deck:
+                order = []
+                for part in deck.slide_parts:
+                    raw = deck.read_bytes(part)
+                    key, _how = slide_identity(raw)
+                    bid = by_identity.get(key)
+                    if bid is None:
+                        geo = geometry_key(raw)
+                        bid = by_geometry.get(geo) if geo else None
+                    if bid is None:
+                        unmatched += 1
+                        continue
+                    matched += 1
+                    if bid not in order:
+                        order.append(bid)
+                if order:
+                    orders.append(order)
+        except Exception as exc:
+            unreadable.append("%s: %s" % (os.path.basename(path), exc))
+    return orders, unreadable, {"matched": matched, "unmatched": unmatched,
+                                "decks": len(decks)}
+
+
+def anchors_from_deck_orders(orders, block_decks):
+    """block id -> the block it followed, from the decks' own slide order.
+
+    The anchor has to be present whenever the block is, or it disappears
+    exactly when it is needed — so we walk back to the nearest earlier block
+    whose set of decks is a superset of this one's. The first deck that shows a
+    block decides its anchor, matching what the merge itself does.
+    """
+    anchors = {}
+    for order in orders:
+        for i, bid in enumerate(order):
+            if bid in anchors:
+                continue
+            mine = set(block_decks.get(bid) or [])
+            for earlier in reversed(order[:i]):
+                if set(block_decks.get(earlier) or []) >= mine:
+                    anchors[bid] = earlier
+                    break
+    return anchors
+
+
+def propose_from_provenance(template, payloads_dir, decks_dir=None):
     """Rebuild rules.json for a merged template. -> report dict.
 
     Existing placeholder bindings are preserved: they come from tokenising the
@@ -166,9 +250,16 @@ def propose_from_provenance(template, payloads_dir):
     # deck - so say so rather than presenting it as evidence.
     recorded = {bid: (blocks[bid] or {}).get("after")
                 for bid in block_decks if (blocks[bid] or {}).get("after")}
-    guessed = derive_anchors(order, block_decks)
-    anchors = dict(guessed)
+    recovered, unreadable, matching = {}, [], None
+    if decks_dir:
+        # the decks themselves are the authority, and reading them costs
+        # nothing next to rebuilding the library
+        orders, unreadable, matching = recover_anchors(template, decks_dir)
+        recovered = anchors_from_deck_orders(orders, block_decks)
+    anchors = derive_anchors(order, block_decks)
+    anchors.update(recovered)
     anchors.update(recorded)
+    from_decks = set(recorded) | set(recovered)
 
     baseline = [bid for bid in order if bid not in proposals]
     rule_blocks, unanchored = {}, []
@@ -183,7 +274,7 @@ def propose_from_provenance(template, payloads_dir):
         anchor = anchors.get(bid)
         if anchor and (anchor in baseline or anchor in proposals):
             spec["insert_after"] = anchor
-            if bid not in recorded:
+            if bid not in from_decks:
                 spec["_confirm_position"] = (
                     "placed from library order, not from the decks - check it "
                     "sits where it should")
@@ -218,7 +309,8 @@ def propose_from_provenance(template, payloads_dir):
     return {"baseline": len(baseline), "conditional": len(rule_blocks),
             "unanchored": unanchored, "unpaired_decks": unpaired,
             "stale_blocks": stale, "notes": notes,
-            "anchors_recorded": sum(1 for b in rule_blocks if b in recorded),
+            "anchors_from_decks": sum(1 for b in rule_blocks if b in from_decks),
             "anchors_guessed": sum(1 for b in rule_blocks
-                                   if b not in recorded and b not in unanchored),
+                                   if b not in from_decks and b not in unanchored),
+            "unreadable_decks": unreadable, "deck_matching": matching,
             "placeholders_kept": len(rules.get("placeholders") or {})}

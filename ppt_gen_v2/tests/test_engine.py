@@ -1255,6 +1255,44 @@ class TestMasterMerge(EngineTestCase):
                                self.out("rebuilt_rules.pptx"))
         self.assertEqual(built["slides"], 8, "not every slide, only the right ones")
 
+    def test_anchors_can_be_recovered_from_the_decks(self):
+        """provenance.json from an older merge has no anchors. The decks still
+        know the order, and reading them is far cheaper than rebuilding the
+        library - which is the part that is hard to get right."""
+        from engine import propose
+        self.merge("--tokenise")
+        folder = os.path.join(self.roots, "merged")
+
+        prov_path = os.path.join(folder, "provenance.json")
+        prov = json.load(open(prov_path, encoding="utf-8"))
+        for info in prov["blocks"].values():
+            info.pop("after", None)                    # the older shape
+        with open(prov_path, "w", encoding="utf-8") as fh:
+            json.dump(prov, fh)
+        self._wipe_rules(folder)
+
+        without = propose.propose_from_provenance(Template(folder), self.pays)
+        self._wipe_rules(folder)
+        with_decks = propose.propose_from_provenance(Template(folder), self.pays,
+                                                     decks_dir=self.decks)
+        self.assertGreater(with_decks["anchors_from_decks"],
+                           without["anchors_from_decks"],
+                           "reading the decks must recover positions")
+
+    def test_geometry_is_only_trusted_when_it_names_one_block(self):
+        """Slides built from one layout share their geometry. Matching on it
+        anyway would put a block in the wrong place, quietly - so an ambiguous
+        geometry must match nothing at all."""
+        from engine import propose
+        self.merge("--tokenise")
+        folder = os.path.join(self.roots, "merged")
+        orders, unreadable, matching = propose.recover_anchors(
+            Template(folder), self.decks)
+        self.assertEqual(unreadable, [])
+        for order in orders:
+            self.assertEqual(len(order), len(set(order)),
+                             "a block matched twice means a wrong match")
+
     # -- tokenising -------------------------------------------------------
     def test_without_tokenising_the_library_is_one_client_snapshot(self):
         """Generated decks have their values already substituted. Saying so is

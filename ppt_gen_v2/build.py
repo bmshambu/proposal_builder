@@ -222,17 +222,29 @@ def cmd_rules(args):
     from engine import propose
 
     tpl = resolve(args)
-    report = propose.propose_from_provenance(tpl, args.payloads)
+    report = propose.propose_from_provenance(tpl, args.payloads,
+                                             decks_dir=args.decks)
 
     print("Rewrote %s" % os.path.basename(tpl.rules_path))
     print("  %d baseline (in every deck), %d conditional (proposed)"
           % (report["baseline"], report["conditional"]))
     print("  %d placeholder binding(s) kept" % report["placeholders_kept"])
+    if report["anchors_from_decks"]:
+        print("  %d block(s) placed from the decks' own slide order"
+              % report["anchors_from_decks"])
     if report["anchors_guessed"]:
         print("  ! %d block(s) placed from library order, not from the decks -"
               % report["anchors_guessed"])
-        print("    provenance.json predates the merge recording anchors, so")
-        print("    their position is a guess. Marked _confirm_position.")
+        print("    their position is a guess, marked _confirm_position. Pass")
+        print("    --decks <folder> to recover the real order from the decks.")
+    m = report.get("deck_matching")
+    if m and m["unmatched"]:
+        print("  ! %d of %d slides across %d deck(s) could not be matched to a"
+              % (m["unmatched"], m["matched"] + m["unmatched"], m["decks"]))
+        print("    block, so their positions stay guesses. Slides are matched")
+        print("    by creationId; geometry is used only when it names one block.")
+    for line in report.get("unreadable_decks") or []:
+        print("  ! could not read %s" % line)
     if report["unpaired_decks"]:
         print("  ! no payload matched %d deck(s): %s"
               % (len(report["unpaired_decks"]),
@@ -434,6 +446,9 @@ def main(argv=None):
     ru.add_argument("template")
     ru.add_argument("--payloads", required=True,
                     help="folder of the payloads that generated the decks")
+    ru.add_argument("--decks",
+                    help="folder of the source decks, to recover the real slide "
+                         "order (only the decks know it)")
 
     rc = sub.add_parser("reconcile",
                         help="re-key blocks.json after the library was rewritten")

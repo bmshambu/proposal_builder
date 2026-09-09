@@ -44,60 +44,13 @@ sys.path.insert(0, PARENT)
 from engine import ooxml                                      # noqa: E402
 from engine.library import Library, slide_title, slugify      # noqa: E402
 
-try:
-    import pptx_forensics as pf                               # noqa: E402
-except ImportError:                                           # pragma: no cover
-    pf = None
-
 # Parts we never carry into the library: speaker notes (they back-reference a
 # slide), Templafy's customer-data tags, and comments.
 _DROP_REL = ("notesSlide", "/tags", "comments")
 
 
 # ---------------------------------------------------------------- identity
-# PowerPoint stamps <a16:creationId id="{GUID}"/> on shapes (and p14:creationId
-# on slides). Read straight out of the raw XML rather than through a parsed
-# tree: it costs nothing, and it cannot be defeated by anything else in the
-# slide that a full parse might choke on. Falling back to hashing whole slides
-# is a silent disaster — every deck's copy of a slide differs by its client
-# name, so nothing de-duplicates and you get one block per slide per deck.
-_CREATION_ID = re.compile(rb'creationId[^>]*?\bid="\{?([0-9A-Fa-f-]{8,})\}?"')
-_A_T_BYTES = re.compile(rb'<a:t(?:\s[^>]*)?>(.*?)</a:t>', re.DOTALL)
-_OFF = re.compile(rb'<a:off\b[^>]*?\bx="(-?\d+)"[^>]*?\by="(-?\d+)"')
-_EXT = re.compile(rb'<a:ext\b[^>]*?\bcx="(\d+)"[^>]*?\bcy="(\d+)"')
-
-
-def slide_identity(xml_bytes, notes=None):
-    """-> (key, how). The same slide in two decks must give the same key.
-
-    `notes` collects the reason a stronger method was unavailable, so the tool
-    can say why it fell back instead of quietly producing a useless library.
-    """
-    cids = _CREATION_ID.findall(xml_bytes)
-    if cids:
-        return ("cid", frozenset(c.decode("ascii").lower() for c in cids)), "creationId"
-
-    if pf is not None:
-        try:
-            data = pf.parse_slide_xml(xml_bytes)
-            geom = data.get("geom_sig") or frozenset()
-            text = re.sub(r"\s+", " ", (data.get("text") or "")).strip().lower()
-            if geom or text:
-                return ("struct", geom, text), "structure+text"
-        except Exception as exc:
-            if notes is not None:
-                notes["parse_failed"] = "%s: %s" % (type(exc).__name__, exc)
-    elif notes is not None:
-        notes.setdefault("no_forensics", "pptx_forensics could not be imported")
-
-    # last resort before hashing everything: geometry alone is token-invariant,
-    # so a slide still matches across decks even though its text differs
-    geom = frozenset(zip(_OFF.findall(xml_bytes), _EXT.findall(xml_bytes)))
-    if geom:
-        return ("geom", geom), "geometry"
-
-    body = re.sub(rb"\s+", b" ", xml_bytes)
-    return ("sha", hashlib.sha1(body).hexdigest()), "bytes"
+from engine.identity import slide_identity                    # noqa: E402,F401
 
 
 # ---------------------------------------------------------------- packaging
