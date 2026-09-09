@@ -869,6 +869,28 @@ class TestMasterMerge(EngineTestCase):
                                os.path.join(folder, name + ".pptx"))
         return folder
 
+    def test_relationship_targets_are_relative(self):
+        """Package-absolute targets ("/ppt/...") are legal and Templafy emits
+        them, but PowerPoint's own files are relative throughout. A package it
+        refuses to open is not the place to rely on a tolerance we cannot test
+        here - no test in this suite opens PowerPoint."""
+        decks = self._templafy_decks()
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.bmd.main([decks, "--payloads", self.pays, "--templates",
+                           self.roots, "--name", "rel", "--overwrite"])
+        z = zipfile.ZipFile(os.path.join(self.roots, "rel", "library.pptx"))
+        absolute = []
+        for name in z.namelist():
+            if not name.endswith(".rels"):
+                continue
+            for tag in ooxmlmod.rel_tags(z.read(name).decode()):
+                if 'TargetMode="External"' in tag:
+                    continue
+                target = ooxmlmod.rel_attr(tag, "Target") or ""
+                if target.startswith("/"):
+                    absolute.append("%s -> %s" % (name, target))
+        self.assertEqual(absolute, [])
+
     def test_smartart_relationships_are_not_dropped(self):
         """SmartArt points at its four parts with r:dm / r:lo / r:qs / r:cs.
         A keeper that only knows r:id, r:embed and r:link drops all four and

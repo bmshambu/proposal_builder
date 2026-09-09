@@ -198,13 +198,17 @@ def _normalise_for_hash(data):
     return data
 
 
-def _abs_target(part):
-    """Rewritten relationships use package-absolute targets.
+def _rel_target(owner, part):
+    """A relationship Target, written the way PowerPoint writes them.
 
-    Legal OOXML — Templafy's own decks do it — and it removes every chance of
-    getting a `../` wrong while re-pointing a part that moved.
+    Package-absolute targets ("/ppt/slides/slide1.xml") are legal, and Templafy
+    emits them, so the merge used them — they remove any chance of getting a
+    "../" wrong. But PowerPoint's own files are relative throughout, and a
+    package it will not open is not the place to be relying on a tolerance we
+    cannot test. Relative it is; the arithmetic is one call.
     """
-    return "/" + part.lstrip("/")
+    rel = os.path.relpath(part, os.path.dirname(owner))
+    return rel.replace("\\", "/")
 
 
 def _rebuild_rels(entries):
@@ -274,7 +278,7 @@ class Merger:
                     new_dep = self._import_media(lib, dep)
                 else:
                     new_dep = self._import_closure(lib, dep, kind_of)
-                entries.append((rid, rtype, _abs_target(new_dep), False))
+                entries.append((rid, rtype, _rel_target(name, new_dep), False))
         self.out.add(ooxml.rels_part_for(name), _rebuild_rels(entries), None)
         return name
 
@@ -338,7 +342,7 @@ class Merger:
                 new_dep = self._import_closure(lib, dep, self._kind_of)
                 if "slideLayout" in rtype:
                     layout_out = new_dep
-            entries.append((rid, rtype, _abs_target(new_dep), False))
+            entries.append((rid, rtype, _rel_target("ppt/slides/s.xml", new_dep), False))
 
         name = self.out._next("slide")
         self.out.add(name, xml.encode("utf-8"), ooxml.CT_SLIDE)
@@ -498,7 +502,7 @@ class Merger:
                 entries.append(
                     '<Relationship Id="%s" Type="http://schemas.openxmlformats'
                     '.org/officeDocument/2006/relationships/slideLayout" '
-                    'Target="%s"/>' % (rid, _abs_target(layout)))
+                    'Target="%s"/>' % (rid, _rel_target(master, layout)))
             self.out.parts[rels_part] = ooxml.build_rels(kept + entries).encode("utf-8")
 
             body = self.out.parts[master].decode("utf-8", "ignore")
@@ -527,7 +531,7 @@ class Merger:
                 rid = ooxml.rel_attr(tag, "Id")
                 tag = ('<Relationship Id="%s" Type="http://schemas.openxmlformats'
                        '.org/officeDocument/2006/relationships/slideMaster" '
-                       'Target="%s"/>' % (rid, _abs_target(master)))
+                       'Target="%s"/>' % (rid, _rel_target(layout, master)))
             tags.append(tag)
         self.out.parts[rels_part] = ooxml.build_rels(tags).encode("utf-8")
 
@@ -543,13 +547,13 @@ class Merger:
                 "relationships/")
         for master in self.masters:
             rid = minter.mint()
-            prs_entries.append((rid, base + "slideMaster", _abs_target(master), False))
+            prs_entries.append((rid, base + "slideMaster", _rel_target("ppt/presentation.xml", master), False))
         master_ids = "".join(
             '<p:sldMasterId id="%d" r:id="%s"/>' % (2147483648 + n, e[0])
             for n, e in enumerate(prs_entries))
         for n, slide in enumerate(slides):
             rid = minter.mint()
-            prs_entries.append((rid, base + "slide", _abs_target(slide), False))
+            prs_entries.append((rid, base + "slide", _rel_target("ppt/presentation.xml", slide), False))
             sld_ids.append('<p:sldId id="%d" r:id="%s"/>' % (256 + n, rid))
         prs = self.base_presentation
         prs = re.sub(r'<p:notesMasterIdLst\b.*?</p:notesMasterIdLst>', '', prs,
