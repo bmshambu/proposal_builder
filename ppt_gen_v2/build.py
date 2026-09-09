@@ -8,6 +8,7 @@
     python build.py preview office --out out/sheet.html    # slide images (built in)
     python build.py check   office                        # write report.md
     python build.py reconcile office                      # re-key blocks.json
+    python build.py tokenise  office --payload p.json     # put {{placeholders}} back
     python build.py make    office --answers a.json --out out/deck.pptx
 
 Adding a template is a file operation — drop a folder under templates/, or run
@@ -161,6 +162,50 @@ def cmd_rename(args):
     tpl = resolve(args)
     part = tpl.rename_block(args.old, args.new)
     print("Renamed %s -> %s (%s); rules.json updated" % (args.old, args.new, part))
+    return 0
+
+
+# ---------------------------------------------------------------- tokenise
+def cmd_tokenise(args):
+    """Restore placeholders in a library whose values are already filled in.
+
+    A library merged from generated decks is a snapshot of one client: the
+    cover says "Example Corporation", not "{{ClientName}}". This puts the
+    placeholders back on the library you already have, rather than rebuilding
+    it - which matters once PowerPoint has agreed to open it.
+    """
+    from engine import tokenise as tk
+
+    tpl = resolve(args)
+    payload = read_json(args.payload)
+    report = tk.tokenise_library(tpl, payload, backup=not args.no_backup)
+
+    hits = report["replacements"]
+    if not hits:
+        print("Nothing replaced - none of the payload's values appear in the")
+        print("deck text as written. Check you passed the payload that")
+        print("generated these slides.")
+        return 1
+
+    print("Restored placeholders in %d slide(s):" % report["slides_changed"])
+    for literal, n in sorted(hits.items(), key=lambda kv: -kv[1]):
+        print("   %-36s %3d occurrence(s)" % ('"%s"' % literal[:34], n))
+    if report["backup"]:
+        print("   previous library kept at %s" % os.path.basename(report["backup"]))
+
+    # bind them, or the placeholders are visible text and nothing fills them
+    rules = read_json(tpl.rules_path) if os.path.exists(tpl.rules_path) else {}
+    rules.setdefault("placeholders", {})
+    rules["placeholders"].update(tk.bindings_for(report["map"], report["formats"]))
+    with open(tpl.rules_path, "w", encoding="utf-8") as fh:
+        json.dump(rules, fh, indent=2, ensure_ascii=False)
+    print("   bound %d placeholder(s) in rules.json" % len(report["map"]))
+
+    print("")
+    print("Check them: a value can be a real answer in one place and ordinary")
+    print("wording in another (v1 hit this with \"New York\").")
+    print("   python build.py check   %s" % tpl.name)
+    print("   python build.py preview %s" % tpl.name)
     return 0
 
 
@@ -335,6 +380,13 @@ def main(argv=None):
     pv.add_argument("--out", help="output .html")
     pv.add_argument("--blocks", nargs="*", help="only these blocks")
 
+    tk = sub.add_parser("tokenise", aliases=["tokenize"],
+                        help="put {{placeholders}} back into a filled-in library")
+    tk.add_argument("template")
+    tk.add_argument("--payload", required=True,
+                    help="the payload whose values are baked into these slides")
+    tk.add_argument("--no-backup", action="store_true")
+
     rc = sub.add_parser("reconcile",
                         help="re-key blocks.json after the library was rewritten")
     rc.add_argument("template")
@@ -366,7 +418,8 @@ def main(argv=None):
     handler = {"list": cmd_list, "import": cmd_import, "inspect": cmd_inspect,
                "rename": cmd_rename, "make": cmd_make,
                "preview": cmd_preview, "check": cmd_check,
-               "reconcile": cmd_reconcile}[args.cmd]
+               "reconcile": cmd_reconcile, "tokenise": cmd_tokenise,
+               "tokenize": cmd_tokenise}[args.cmd]
     try:
         return handler(args)
     except (AssemblyError, RulesError, LibraryError, TemplateError) as exc:

@@ -106,6 +106,25 @@ templates/<name>/
   data_sources.json   stubs for external systems (optional)
 ```
 
+### If the library has one client's details baked in
+
+A deck Templafy generated has its values already substituted, so a library
+merged from such decks is a **snapshot of one client** — it builds the same deck
+for everyone. `check` reports this as `no-placeholders`.
+
+```bash
+python build.py tokenise firm --payload ../data/payloads/00_baseline.json
+```
+
+That rewrites only the text inside `<a:t>` on the library you already have,
+keeps a `.before-tokenise` backup, binds the placeholders in `rules.json`, and
+refreshes the titles recorded in `blocks.json` (substitution changes the very
+text a title is read from). Re-merging would rebuild the package from scratch —
+a much bigger risk once PowerPoint is happy with it.
+
+Review what it replaced: a value can be a real answer in one place and ordinary
+wording in another — v1 hit exactly this with "New York".
+
 ### After the library deck is rewritten
 
 `blocks.json` is keyed by slide *part name*, so anything that renumbers parts —

@@ -30,6 +30,7 @@ from engine import (Library, Rules, Template, build,          # noqa: E402
 from engine import bindings, ooxml as ooxmlmod, placeholders  # noqa: E402
 from engine import report as reportmod                        # noqa: E402
 from engine import svg as svgmod                              # noqa: E402
+from engine import tokenise as tokenisemod                    # noqa: E402
 from engine.assemble import AssemblyError                     # noqa: E402
 from engine.library import LibraryError                       # noqa: E402
 from engine.rules import RulesError, evaluate                 # noqa: E402
@@ -1266,6 +1267,125 @@ class TestMasterMerge(EngineTestCase):
         self.assertEqual(actual, expected)
 
 
+# ---------------------------------------------------------------- tokenise
+class TestTokeniseLibrary(EngineTestCase):
+    """Restoring placeholders in a library that is already built.
+
+    The real template was merged without --tokenise, so its slides carry one
+    client's details as literal text. Re-merging to fix that would rebuild a
+    package PowerPoint had only just agreed to open, so the repair has to work
+    on the library as it stands.
+    """
+
+    def setUp(self):
+        self.payload = {"FullClientName": "Example Corporation",
+                        "ShortClientName": "Example", "DueDate": "20261130",
+                        "City": "New York", "AuditType": "Statutory Audit"}
+        self.folder = os.path.join(
+            tempfile.mkdtemp(prefix="pptgen2_tok_", dir=self.tmp), "snap")
+        shutil.copytree(DEMO, self.folder,
+                        ignore=shutil.ignore_patterns("report.md"))
+        # a library with the values already filled in, like a generated deck
+        build(LIBRARY, self.rules, self.payload,
+              os.path.join(self.folder, "library.pptx"), data_sources=self.data)
+        with open(os.path.join(self.folder, "template.json"), "w") as fh:
+            json.dump({"name": "snap", "library": "library.pptx"}, fh)
+        # The built deck's markers are stripped, so its ids would come from
+        # titles - and tokenising rewrites the very text a title is read from.
+        # Pin them in a sidecar first, exactly as the real template does.
+        tpl = Template(self.folder)
+        with tpl.open_library() as lib:
+            tpl.write_block_map({os.path.basename(b.part):
+                                 {"id": b.id, "title": b.title}
+                                 for b in lib.ordered()})
+            baseline = [b.id for b in lib.ordered()]
+        with open(os.path.join(self.folder, "rules.json"), "w",
+                  encoding="utf-8") as fh:
+            json.dump({"name": "snap", "baseline": baseline, "blocks": {},
+                       "placeholders": {}}, fh)
+
+    def test_a_filled_in_library_has_no_placeholders_to_begin_with(self):
+        with Template(self.folder).open_library() as lib:
+            self.assertEqual(lib.all_placeholders(), set())
+
+    def test_tokenising_puts_them_back(self):
+        report = tokenisemod.tokenise_library(Template(self.folder), self.payload)
+        with Template(self.folder).open_library() as lib:
+            found = lib.all_placeholders()
+        self.assertIn("ClientName", found)
+        self.assertIn("DueDate", found)
+        self.assertIn("City", found)
+        self.assertGreater(report["slides_changed"], 0)
+
+    def test_the_deck_is_still_valid_afterwards(self):
+        """Only text inside <a:t> is touched; everything else is copied
+        through, so a package PowerPoint accepts stays acceptable."""
+        tokenisemod.tokenise_library(Template(self.folder), self.payload)
+        from engine import validate as validator
+        self.assertEqual(
+            validator.validate(os.path.join(self.folder, "library.pptx")), [])
+
+    def test_the_previous_library_is_kept(self):
+        report = tokenisemod.tokenise_library(Template(self.folder), self.payload)
+        self.assertTrue(os.path.exists(report["backup"]))
+
+    def test_the_date_rendering_is_recorded_for_the_binding(self):
+        report = tokenisemod.tokenise_library(Template(self.folder), self.payload)
+        self.assertEqual(report["formats"].get("DueDate"), "long_comma")
+        bindings = tokenisemod.bindings_for(report["map"], report["formats"])
+        self.assertEqual(bindings["{{DueDate}}"],
+                         {"from": "field", "field": "DueDate",
+                          "format": "long_comma"})
+
+    def test_whole_words_only(self):
+        """v1 §2: "Example" must not turn "Examples" into a placeholder."""
+        reps = tokenisemod.replacements({"ShortClientName": "Example"},
+                                        {"ShortClientName": "Short"})
+        out, hits, _f = tokenisemod.tokenise_part(
+            "<a:t>Examples of Example work</a:t>", reps)
+        self.assertIn("Examples of {{Short}} work", out)
+        self.assertEqual(hits["Example"], 1)
+
+    def test_a_round_trip_produces_a_different_client(self):
+        """The point of the exercise."""
+        tpl = Template(self.folder)
+        report = tokenisemod.tokenise_library(tpl, self.payload)
+        rules = json.load(open(tpl.rules_path, encoding="utf-8"))
+        rules["placeholders"] = tokenisemod.bindings_for(report["map"],
+                                                         report["formats"])
+        with open(tpl.rules_path, "w", encoding="utf-8") as fh:
+            json.dump(rules, fh)
+
+        built = build_template(Template(self.folder),
+                               {"FullClientName": "Acme Holdings plc",
+                                "ShortClientName": "Acme", "DueDate": "20270601",
+                                "City": "Leeds", "AuditType": "Statutory Audit"},
+                               self.out("tokenised_roundtrip.pptx"))
+        text = _deck_text(built["out"])
+        self.assertIn("Acme Holdings plc", text)
+        self.assertIn("June 1, 2027", text)
+        self.assertIn("Leeds", text)
+        for leaked in ("Example Corporation", "November 30, 2026", "New York"):
+            self.assertNotIn(leaked, text, "%r survived" % leaked)
+
+    def test_recorded_titles_are_refreshed(self):
+        """Substitution rewrites the text a title is read from, so leaving the
+        sidecar alone would make every tokenised slide report drift straight
+        afterwards - burying real warnings under self-inflicted ones."""
+        report = tokenisemod.tokenise_library(Template(self.folder), self.payload)
+        self.assertGreater(report["retitled"], 0)
+        with Template(self.folder).open_library() as lib:
+            self.assertEqual(lib.map_drift(), [])
+
+    def test_the_wrong_payload_changes_nothing(self):
+        """Better to replace nothing and say so than to mangle the deck."""
+        report = tokenisemod.tokenise_library(
+            Template(self.folder),
+            {"FullClientName": "Some Other Company", "DueDate": "19990101"})
+        self.assertEqual(report["replacements"], {})
+        self.assertEqual(report["slides_changed"], 0)
+
+
 # ---------------------------------------------------------------- check
 class TestReport(EngineTestCase):
     """`build.py check` is how a problem reaches us from a machine we cannot
@@ -1352,7 +1472,8 @@ class TestReport(EngineTestCase):
         rep = self.report(Template(folder))
         error = next(f for f in rep.of(reportmod.ERROR)
                      if f.code == "no-placeholders")
-        self.assertIn("--tokenise", error.detail)
+        self.assertIn("build.py tokenise", error.detail,
+                      "the report must name the command that fixes it")
 
     def test_a_merge_that_did_not_merge_is_an_error(self):
         """The real 70-deck run filed this as a note at the bottom, under the

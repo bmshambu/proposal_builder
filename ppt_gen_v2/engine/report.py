@@ -218,16 +218,27 @@ def _check_rules(rep, template, lib):
     # client. When the library was merged from *generated* decks this is the
     # expected failure: the values were already substituted before the merge,
     # so what looks like a template is a snapshot of whoever it was built for.
-    if not used:
+    #
+    # The test is whether anything will *actually be substituted* — bound and
+    # used — not merely whether some `{{...}}` exists somewhere. A template can
+    # carry a stray unfilled token (Templafy leaves them behind) while nothing
+    # at all is wired up, and asking "are there any placeholders?" then answers
+    # yes and hides the fact that every client gets the same deck.
+    if not (bound & used):
         merged = os.path.exists(os.path.join(template.folder, "provenance.json"))
         rep.add(ERROR if merged else WARNING, "no-placeholders",
-                "No slide contains a placeholder, so every deck this template "
+                "Nothing will be substituted, so every deck this template "
                 "builds will be identical",
                 ("This library was merged from generated decks, whose values "
                  "were already substituted - so it is a snapshot of one "
-                 "client, not a template. Re-run the merge with `--tokenise` "
-                 "to put `{{ClientName}}`, `{{DueDate}}` and `{{City}}` back "
-                 "where that client's values appear."
+                 "client, not a template."
+                 "\n\nPut the placeholders back into the library you already "
+                 "have, using the payload that generated these slides:\n\n"
+                 "    python build.py tokenise <template> --payload "
+                 "<that-payload>.json\n\n"
+                 "That edits only the text inside <a:t> and keeps a backup, so "
+                 "a library PowerPoint is happy with stays that way. Re-merging "
+                 "would rebuild it from scratch, which is a bigger risk."
                  if merged else
                  "Add `{{Placeholders}}` in PowerPoint where values belong, "
                  "then bind them in rules.json."))

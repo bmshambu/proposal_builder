@@ -664,93 +664,13 @@ class Merger:
 # ---------------------------------------------------------------- tokenising
 # A generated deck has its values already substituted: the cover says
 # "Example Corporation", not "{{ClientName}}". Merging those decks therefore
-# produces a *snapshot of one client*, not a template. Putting the placeholders
-# back is what makes the result reusable.
-#
-# This is v1's token detection run backwards, and it inherits v1's warning
-# (v1-learnings §3): a value can be both dynamic and static on the same slide —
-# "New York" is a city answer *and* an office address in the boilerplate.
-# So it is opt-in, whole-word only, and reports every field it touched.
-DEFAULT_TOKENS = {
-    "FullClientName": "ClientName",
-    "ShortClientName": "ShortClientName",
-    "DueDate": "DueDate",
-}
-MIN_TOKEN_LEN = 4          # never swap something as short as a code or initial
-
-_A_T = re.compile(r'(<a:t(?:\s[^>]*)?>)(.*?)(</a:t>)', re.DOTALL)
-
-
-def _guess_token_map(payload):
-    """Payload field -> placeholder name, for the text-substitution fields.
-
-    Most payload answers *select slides*; only a few are literal text in the
-    deck. Those are the client names, the date, and the city — the same short
-    list v1 arrived at.
-    """
-    token_map = {}
-    for field in payload:
-        if field in DEFAULT_TOKENS:
-            token_map[field] = DEFAULT_TOKENS[field]
-        elif "city" in field.lower():
-            token_map[field] = "City"
-    return token_map
-
-
-def _replacements(payload, token_map):
-    """[(literal, placeholder, field, format)] longest-first.
-
-    A date is written many ways ("November 30, 2026", "30/11/2026"). We swap
-    whichever the deck actually used, and remember *which* — otherwise the
-    binding has no way to render it back and the rebuilt deck shows a raw
-    20261130.
-    """
-    from engine.bindings import date_formats
-    reps = []
-    for field, name in token_map.items():
-        value = payload.get(field)
-        if value in (None, "", True, False):
-            continue
-        text = str(value)
-        variants = date_formats(text)
-        if variants:
-            for fmt, rendered in variants.items():
-                if len(rendered) >= MIN_TOKEN_LEN:
-                    reps.append((rendered, "{{%s}}" % name, field, fmt))
-        elif len(text) >= MIN_TOKEN_LEN:
-            reps.append((text, "{{%s}}" % name, field, None))
-    reps.sort(key=lambda r: -len(r[0]))     # "Example Corporation" before "Example"
-    return reps
-
-
-def tokenise_part(xml, reps):
-    """-> (new xml, {literal: count}, {field: {format: count}}).
-
-    Substitution happens only inside <a:t> and only on whole words, so
-    "Example" never turns "Examples" into "{{ShortClientName}}s" (v1 §2).
-    """
-    if not reps:
-        return xml, {}, {}
-    hits, formats = {}, {}
-    compiled = [(re.compile(r'(?<!\w)' + re.escape(lit) + r'(?!\w)'), lit, ph, fld, fmt)
-                for lit, ph, fld, fmt in reps]
-
-    def one(m):
-        from engine import ooxml as _o
-        raw = _o.xml_unescape(m.group(2))
-        new = raw
-        for pattern, lit, ph, fld, fmt in compiled:
-            new, n = pattern.subn(ph, new)
-            if n:
-                hits[lit] = hits.get(lit, 0) + n
-                if fmt:
-                    formats.setdefault(fld, {})
-                    formats[fld][fmt] = formats[fld].get(fmt, 0) + n
-        if new == raw:
-            return m.group(0)
-        return m.group(1) + _o.xml_escape(new) + m.group(3)
-
-    return _A_T.sub(one, xml), hits, formats
+# produces a snapshot of one client, not a template. The mechanics live in
+# engine/tokenise.py so the same repair can be run later on a library that
+# already exists — which is what you want once PowerPoint has agreed to open
+# one. Here we only walk the merged parts.
+from engine.tokenise import (bindings_for, chosen_formats,  # noqa: E402
+                             guess_token_map, replacements as _replacements,
+                             tokenise_part)
 
 
 def tokenise(merger, payloads, token_map=None):
@@ -763,7 +683,7 @@ def tokenise(merger, payloads, token_map=None):
         if not payload:
             continue
         if not used_map:
-            used_map = _guess_token_map(payload)
+            used_map = guess_token_map(payload)
         reps = _replacements(payload, used_map)
         part = rec["part"]
         xml = merger.out.parts[part].decode("utf-8", "ignore")
@@ -781,11 +701,8 @@ def tokenise(merger, payloads, token_map=None):
                 fmt_counts[field][fmt] = fmt_counts[field].get(fmt, 0) + n
     for field, name in used_map.items():
         per_field[name] = field
-    # the rendering the deck used most often is the one to bind
-    chosen = {f: max(c.items(), key=lambda kv: kv[1])[0]
-              for f, c in fmt_counts.items() if c}
     return {"replacements": totals, "map": per_field, "fields": used_map,
-            "formats": chosen}
+            "formats": chosen_formats(fmt_counts)}
 
 
 def _placeholder_bindings(token_report):
@@ -793,14 +710,8 @@ def _placeholder_bindings(token_report):
     source decks actually used."""
     if not token_report:
         return {}
-    formats = token_report.get("formats", {})
-    out = {}
-    for field, name in token_report.get("fields", {}).items():
-        binding = {"from": "field", "field": field}
-        if field in formats:
-            binding["format"] = formats[field]
-        out["{{%s}}" % name] = binding
-    return out
+    return bindings_for(token_report.get("fields", {}),
+                        token_report.get("formats", {}))
 
 
 # ---------------------------------------------------------------- rules
