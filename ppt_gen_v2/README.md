@@ -35,13 +35,12 @@ python build.py list                     # registered templates
 python build.py inspect demo             # blocks, where their ids come from, rules check
 python build.py preview demo             # render every block to an SVG contact sheet
 python build.py check   demo --redact    # write report.md describing any problems
-python build.py check   demo             # write report.md describing any problems
 
 # build two decks from ONE library and two answer sets
 python build.py make demo --answers templates/demo/answers.baseline.json  --out out/northwind.pptx -v
 python build.py make demo --answers templates/demo/answers.expansion.json --out out/globex.pptx    -v
 
-python tests/test_engine.py              # 70 tests, standard library only
+python tests/test_engine.py              # 112 tests, standard library only
 ```
 
 Every build runs the structural validator (`engine/validate.py`) before reporting
@@ -235,7 +234,7 @@ ppt_gen_v2/
     assemble.py              <- blocks -> valid .pptx
   templates/<name>/          <- one folder per template; demo/ is the worked example
   tools/                     <- demo-library generator + contact-sheet builder
-  tests/test_engine.py       <- regression suite (70 tests)
+  tests/test_engine.py       <- regression suite (112 tests)
   docs/
     v1-learnings.md          <- the OOXML knowledge v1 paid for. REFERENCE.
     v2-plan.md               <- vision, architecture, roadmap, decisions
