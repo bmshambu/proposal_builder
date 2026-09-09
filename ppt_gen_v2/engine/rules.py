@@ -152,9 +152,14 @@ class Rules:
         # anchor already down. Doing it in one sorted sweep would append a block
         # whose anchor simply had not been placed yet, which made the output
         # order depend on how the ids happened to sort.
-        pending = [(bid, spec) for bid, spec in sorted(self.blocks.items())
+        # Blocks are taken in the order rules.json declares them, not sorted by
+        # id. Alphabetical order is arbitrary; declaration order is what the
+        # author (or the merge, writing them in the decks' own order) meant.
+        # It is just as deterministic, since JSON preserves it.
+        pending = [(bid, spec) for bid, spec in self.blocks.items()
                    if bid not in self.baseline
                    and evaluate((spec or {}).get("when", "always"), flat)]
+        siblings = {}          # anchor -> how many blocks sit under it already
         while pending:
             progressed = []
             for bid, spec in pending:
@@ -163,7 +168,13 @@ class Rules:
                     order.append(bid)
                     trace.append("add %s (appended: no insert_after)" % bid)
                 elif anchor in order:
-                    order.insert(order.index(anchor) + 1, bid)
+                    # Land *after* anything already placed under this anchor.
+                    # Inserting each one directly after the anchor puts them in
+                    # reverse: the second block placed ends up before the first,
+                    # so two sections that share an anchor come out swapped.
+                    seen = siblings.get(anchor, 0)
+                    order.insert(order.index(anchor) + 1 + seen, bid)
+                    siblings[anchor] = seen + 1
                     trace.append("add %s (after %s)" % (bid, anchor))
                 else:
                     continue                     # anchor not placed yet: retry

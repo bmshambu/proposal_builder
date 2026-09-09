@@ -167,6 +167,42 @@ class TestRules(EngineTestCase):
         self.assertEqual([b for b, _ in base].index("scope") + 1,   # +1: one block added above
                          [b for b, _ in exp].index("scope"))
 
+    def test_blocks_sharing_an_anchor_keep_their_order(self):
+        """Inserting each one directly after the anchor reverses them: the
+        second placed lands before the first. On the real template that put one
+        slide out of place in all 70 decks."""
+        rules = Rules({"baseline": ["a", "x", "z"],
+                       "blocks": {
+                           "first": {"slides": ["first"], "when": "always",
+                                     "insert_after": "x"},
+                           "second": {"slides": ["second"], "when": "always",
+                                      "insert_after": "x"},
+                           "third": {"slides": ["third"], "when": "always",
+                                     "insert_after": "x"}}})
+        self.assertEqual([b for b, _ in rules.select({})[0]],
+                         ["a", "x", "first", "second", "third", "z"])
+
+    def test_declaration_order_decides_siblings_not_the_alphabet(self):
+        """The merge writes blocks in the decks' own order, so that is the
+        order to honour - sorting by id would scramble it."""
+        rules = Rules({"baseline": ["x"],
+                       "blocks": {
+                           "zulu": {"slides": ["zulu"], "when": "always",
+                                    "insert_after": "x"},
+                           "alpha": {"slides": ["alpha"], "when": "always",
+                                     "insert_after": "x"}}})
+        self.assertEqual([b for b, _ in rules.select({})[0]],
+                         ["x", "zulu", "alpha"])
+
+    def test_a_chain_of_anchors_still_works(self):
+        rules = Rules({"baseline": ["x"],
+                       "blocks": {
+                           "b2": {"slides": ["b2"], "when": "always",
+                                  "insert_after": "b1"},
+                           "b1": {"slides": ["b1"], "when": "always",
+                                  "insert_after": "x"}}})
+        self.assertEqual([b for b, _ in rules.select({})[0]], ["x", "b1", "b2"])
+
     def test_selection_is_deterministic(self):
         answers = _json("answers.expansion.json")
         runs = {tuple(self.rules.select(answers)[0]) for _ in range(5)}

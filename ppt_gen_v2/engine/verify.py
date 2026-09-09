@@ -82,8 +82,33 @@ def _text_difference(original_text, rebuilt_text):
     return [d for d in out if d["ours"].strip()][:5]
 
 
-def compare(original_path, rebuilt_path):
-    """Compare one pair of decks. -> report dict."""
+def block_names(template):
+    """creationId set -> block id, for naming a slide in a report.
+
+    Only where the set names one block: a collision identifies nothing, and
+    guessing a name is worse than printing an index.
+    """
+    from .library import Library
+
+    with Library(template.library_path,
+                 block_map=template.raw_block_map) as lib:
+        blocks = lib.ordered()
+    deck = pf.load_deck(template.library_path)
+    seen = {}
+    for block, slide in zip(blocks, deck["slides"]):
+        cids = frozenset(slide["shape_creation_ids"])
+        if cids:
+            seen.setdefault(cids, []).append(block.id)
+    return {k: v[0] for k, v in seen.items() if len(v) == 1}
+
+
+def compare(original_path, rebuilt_path, names=None):
+    """Compare one pair of decks. -> report dict.
+
+    `names` maps a slide's creationId set to a block id, so a slide in the
+    wrong place can be reported by the name the rules use for it — which is
+    what you need to fix it — rather than by a position number.
+    """
     original = pf.load_deck(original_path)
     rebuilt = pf.load_deck(rebuilt_path)
     pairs, only_original, only_rebuilt = align(original["slides"],
@@ -96,6 +121,20 @@ def compare(original_path, rebuilt_path):
     out_of_order = sum(1 for i in range(len(sequence) - 1)
                        if sequence[i] > sequence[i + 1])
     order_ok = out_of_order == 0
+
+    # Name the slides that are in the wrong place. "One slide out of order" is
+    # only useful if you can tell which, and which block it belongs to.
+    displaced = []
+    for i in range(len(sequence) - 1):
+        if sequence[i] <= sequence[i + 1]:
+            continue
+        for a, b, _m, _s in (pairs[i], pairs[i + 1]):
+            bid = None
+            if names:
+                bid = names.get(frozenset(a["shape_creation_ids"]))
+            displaced.append({"block": bid, "templafy_index": a["index"],
+                              "our_index": b["index"],
+                              "preview": (a["text"] or "")[:60]})
 
     by_method, text_differs = {}, []
     for a, b, method, _score in pairs:
@@ -134,6 +173,7 @@ def compare(original_path, rebuilt_path):
         "templafy_slides": original["slide_count"],
         "our_slides": rebuilt["slide_count"],
         "matched": len(pairs), "by_method": by_method,
+        "displaced": displaced,
         "missing": [{"index": s["index"], "preview": s["text"][:70]}
                     for s in missing],
         "extra": [{"index": s["index"], "preview": s["text"][:70]}
@@ -157,6 +197,10 @@ def verify(template, decks_dir, payloads_dir, build_fn=None, limit=None):
              for p in sorted(glob.glob(os.path.join(str(decks_dir), "*.pptx")))
              if not os.path.basename(p).startswith("~$")}
     payloads, unpaired = load_payloads(payloads_dir, sorted(decks))
+    try:
+        names = block_names(template)
+    except Exception:                       # naming is a courtesy, not the job
+        names = {}
 
     results = []
     tmp = tempfile.mkdtemp(prefix="pptgen2_verify_")
@@ -165,7 +209,7 @@ def verify(template, decks_dir, payloads_dir, build_fn=None, limit=None):
             out = os.path.join(tmp, label + ".pptx")
             try:
                 build_fn(template, payloads[label], out)
-                row = compare(decks[label], out)
+                row = compare(decks[label], out, names=names)
             except Exception as exc:
                 row = {"verdict": "BUILD FAILED", "exact": False,
                        "selection_ok": False,

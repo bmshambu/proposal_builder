@@ -308,6 +308,10 @@ def cmd_verify(args):
                 print("         missing at %-3s %s" % (s["index"], s["preview"]))
             for s in row.get("extra", [])[:5]:
                 print("         extra   at %-3s %s" % (s["index"], s["preview"]))
+            for d in row.get("displaced", [])[:6]:
+                print("         out of place: %-28s templafy #%s, ours #%s  %s"
+                      % (d["block"] or "?", d["templafy_index"],
+                         d["our_index"], d["preview"]))
             for t in row.get("text_differs", [])[:3]:
                 for seg in t["segments"][:2]:
                     print("         text: ours %r vs templafy %r"
