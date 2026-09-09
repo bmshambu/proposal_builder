@@ -263,6 +263,24 @@ Three mitigations, in order of value:
 - `rules.json` on disk stays the source of truth. The UI is an editor for it,
   not a database in front of it.
 
+### Theming
+
+Every colour is a CSS custom property; nothing in the layout or the SVG
+thumbnails carries a literal hex. A firm with a different palette changes one
+block. Two things that came out of doing it against a real brand:
+
+- **A brand palette is a light-mode palette.** KPMG Blue `#00338D` is superb as
+  an accent on white and invisible as one on a dark ground, so dark mode moves
+  the accent to the light brand blue rather than tinting the same hex and
+  hoping. Dark is a separate set of values, not the light ones dimmed.
+- **Status colours stay outside the brand.** A red that reads as "brand" is a
+  red nobody reacts to, and the whole point of the Library screen is that its
+  warnings are noticed.
+
+Three theme states, not two - light, dark, and *no choice*, which follows the
+OS. Every text-on-background pair in both themes is checked against WCAG AA by
+a script rather than by eye; the check is worth keeping when the palette moves.
+
 ### Deferred, and why it is safe to defer
 
 Single author on localhost for now, which makes these non-issues *today* and

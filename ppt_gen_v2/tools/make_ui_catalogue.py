@@ -152,6 +152,11 @@ def main(argv=None):
     ap.add_argument("--payloads", default=os.path.join(HERE, "..", "..", "data",
                                                        "payloads"))
     ap.add_argument("--out", default=os.path.join(HERE, "..", "ui", "catalogue.js"))
+    ap.add_argument("--brand", default="",
+                    help="firm name to show in the header. Deliberately not a "
+                         "default: the palette is public, the client of this "
+                         "work is not, and this file is the one that gets "
+                         "committed")
     ap.add_argument("--presets", type=int, default=8,
                     help="how many whole payloads to include for one-click "
                          "loading in the Inputs panel (default 8)")
@@ -171,6 +176,7 @@ def main(argv=None):
 
     data = {"fields": fields, "blocks": blocks, "deck": deck,
             "presets": presets,
+            "brand": {"name": args.brand} if args.brand else None,
             "payloads": len(payloads),
             "source": os.path.abspath(args.payloads)}
     out = os.path.abspath(args.out)
