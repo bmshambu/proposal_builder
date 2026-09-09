@@ -146,13 +146,25 @@ def main(argv=None):
     ap.add_argument("--payloads", default=os.path.join(HERE, "..", "..", "data",
                                                        "payloads"))
     ap.add_argument("--out", default=os.path.join(HERE, "..", "ui", "catalogue.js"))
+    ap.add_argument("--presets", type=int, default=8,
+                    help="how many whole payloads to include for one-click "
+                         "loading in the Inputs panel (default 8)")
     args = ap.parse_args(argv)
 
     payloads = read_payloads(args.payloads)
     fields = catalogue(payloads)
     blocks, deck = demo_blocks(fields)
 
+    # A handful of whole payloads, so the Inputs panel can load a real answer
+    # set in one click instead of making someone set 19 controls by hand. Take
+    # them spread across the list rather than the first few, which are all
+    # near-identical baselines.
+    step = max(1, len(payloads) // args.presets)
+    presets = [{"label": label, "answers": flatten(payload)}
+               for label, payload in payloads[::step][:args.presets]]
+
     data = {"fields": fields, "blocks": blocks, "deck": deck,
+            "presets": presets,
             "payloads": len(payloads),
             "source": os.path.abspath(args.payloads)}
     out = os.path.abspath(args.out)

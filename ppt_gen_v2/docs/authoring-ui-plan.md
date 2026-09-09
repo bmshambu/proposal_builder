@@ -124,11 +124,18 @@ cannot fail silently because someone typed `AuditTyp`. Operators are the ones
 the engine already has - `eq / ne / in / not_in / exists`, combined with
 `all / any / not`. Start with a single clause plus "add clause".
 
-**Test-drive strip along the bottom** - pick a payload, or set answers with the
-same widgets, and the deck list updates live: rows that drop out grey off.
-`select()` is pure and fast, so this is instant, and it is what actually makes
-an author *understand* their own rules. This is the feature most likely to be
-underestimated; it should not be cut.
+**Inputs, collapsed by default** - a bar at the bottom that opens on demand.
+Pick a whole payload in one click, or set answers with the same widgets, and the
+deck list updates live: rows that drop out grey off. `select()` is pure and
+fast, so this is instant, and it is what actually makes an author *understand*
+their own rules. This is the feature most likely to be underestimated; it should
+not be cut.
+
+It starts **closed**, and only the answers referenced by some condition get a
+control. With 19 such fields an always-open panel takes a quarter of the screen
+from the slides, which are the thing the author is actually judging. The deck
+tally stays visible while collapsed, so the one number worth watching is never
+hidden behind a click.
 
 ### 3. Mapping - "where does each value come from?"
 

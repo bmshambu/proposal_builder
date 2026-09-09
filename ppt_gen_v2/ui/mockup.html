@@ -12,6 +12,9 @@
   --off:#9aa1ab; --radius:8px; --mono:ui-monospace,Consolas,"Courier New",monospace;
 }
 *{box-sizing:border-box}
+/* several things here are hidden with the `hidden` attribute while their own
+   rule sets display:flex, which would win. Settle it once. */
+[hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--ink);
      font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}
 h1,h2,h3{margin:0;font-weight:600}
@@ -108,18 +111,47 @@ main{padding:16px 18px 30vh}
 
 .testbar{position:fixed;left:0;right:0;bottom:0;background:var(--panel);
   border-top:1px solid var(--line);box-shadow:0 -1px 6px rgba(0,0,0,.05);
-  display:flex;flex-direction:column;max-height:28vh}
-.testbar .head{padding:7px 18px;display:flex;align-items:center;gap:12px;
-  border-bottom:1px solid var(--line)}
-.testbar .lab{font-size:12px;font-weight:600;color:var(--muted);
-  text-transform:uppercase;letter-spacing:.04em}
-.testbar .body{padding:9px 18px;display:flex;gap:8px 16px;flex-wrap:wrap;
+  display:flex;flex-direction:column;max-height:34vh}
+.testbar .head{padding:6px 18px;display:flex;align-items:center;gap:14px}
+.testbar.open .head{border-bottom:1px solid var(--line)}
+.toggle{background:none;border:1px solid var(--line);border-radius:6px;
+  padding:4px 11px;font-size:12px;font-weight:600;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.04em;display:flex;align-items:center;gap:7px}
+.toggle:hover{border-color:var(--accent);color:var(--accent)}
+.toggle .caret{display:inline-block;font-size:9px;transition:transform .15s}
+.testbar.open .toggle{background:var(--accent-soft);border-color:#c9dcf7;color:var(--accent)}
+.testbar.open .toggle .caret{transform:rotate(180deg)}
+.badge{background:var(--accent-soft);color:var(--accent);border-radius:20px;
+  padding:0 7px;font-size:11px}
+.testbar.open .badge{background:#fff}
+.preset{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.testbar .body{padding:10px 18px 12px;display:flex;gap:8px 16px;flex-wrap:wrap;
   overflow:auto}
 .ans{font-size:12px;display:flex;flex-direction:column;gap:2px;max-width:250px}
 .ans .n{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ans.bool{flex-direction:row;align-items:center;gap:5px;max-width:none}
 .tally{margin-left:auto;font-size:13px}
 .tally b{font-size:16px}
+
+/* ------------------------------------------------------------- upload */
+.dropzone{border:2px dashed #cfd6de;border-radius:10px;padding:26px 20px;
+  text-align:center;background:#fbfcfd}
+.dropzone.over{border-color:var(--accent);background:var(--accent-soft)}
+.dz-icon{font-size:26px;color:var(--accent);line-height:1}
+.dz-main{font-size:15px;margin-top:6px}
+.dz-sub{font-size:12.5px;color:var(--muted);margin-top:7px}
+.current{margin-top:12px;display:flex;align-items:center;gap:10px;font-size:13px;
+  border:1px solid var(--line);border-radius:6px;padding:9px 12px;background:#fff}
+.current .f{font-family:var(--mono);font-size:12.5px}
+.current .m{color:var(--muted);font-size:12px}
+.current .sp{flex:1}
+.stats{display:flex;flex-wrap:wrap;gap:0;padding:4px 0}
+.stat{padding:11px 18px;border-right:1px solid var(--line);min-width:118px}
+.stat:last-child{border-right:none}
+.stat b{display:block;font-size:21px;line-height:1.2;font-variant-numeric:tabular-nums}
+.stat span{font-size:11.5px;color:var(--muted)}
+.stat.warn b{color:var(--warn)} .stat.bad b{color:var(--bad)} .stat.ok b{color:var(--ok)}
+.empty main .panel:not(#drop-panel){display:none}
 
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));
   gap:13px;padding:14px}
@@ -159,9 +191,9 @@ td.used{color:var(--muted);font-size:12.5px;white-space:nowrap}
     <small>template: <b>firm</b> &middot; library.pptx &middot;
       <span id="hdr-count"></span></small></div>
   <nav class="tabs">
-    <button data-tab="library">Library</button>
-    <button data-tab="rules" class="on">Rules</button>
-    <button data-tab="mapping">Mapping</button>
+    <button data-tab="library" class="on">1 &middot; Library</button>
+    <button data-tab="rules">2 &middot; Rules</button>
+    <button data-tab="mapping">3 &middot; Mapping</button>
   </nav>
   <span class="spacer"></span>
   <span class="mock" id="source-badge">MOCKUP</span>
@@ -172,20 +204,44 @@ td.used{color:var(--muted);font-size:12.5px;white-space:nowrap}
 
 <main>
 
-<section class="screen" id="screen-library">
-  <div class="panel">
+<section class="screen on" id="screen-library">
+
+  <!-- step 1: the author brings a deck. Nothing else on this screen exists
+       until they do, which is why the empty state is the whole screen. -->
+  <div class="panel" id="drop-panel">
+    <h2>Library <span class="hint" id="drop-hint"></span></h2>
+    <div class="pad">
+      <div class="dropzone" id="dropzone">
+        <div class="dz-icon">&#8681;</div>
+        <div class="dz-main">Drop <b>library.pptx</b> here</div>
+        <div class="dz-sub">or <button class="btn" id="choose">choose a file</button>
+          &mdash; the deck is copied verbatim and inspected; nothing in it is
+          modified</div>
+      </div>
+      <div class="current" id="current"></div>
+    </div>
+  </div>
+
+  <!-- step 1b: what the inspection found. This is the author's first real
+       decision point, so the counts come before the thumbnails. -->
+  <div class="panel" id="inspect-panel">
+    <h2>What the inspection found
+      <span class="hint">engine/library.py &middot; ids, placeholders and anything
+        that will bite later</span></h2>
+    <div class="stats" id="stats"></div>
+    <div class="notice bad" id="lib-bad"></div>
+    <div class="notice warn" id="lib-warn"></div>
+    <div class="notice ok" id="lib-ok"></div>
+  </div>
+
+  <div class="panel" id="sheet-panel">
     <h2>Every slide in the library <span class="count" id="lib-count"></span>
       <span class="hint">thumbnails rendered in-process by engine/svg.py - no PowerPoint, no LibreOffice</span></h2>
-    <div class="notice bad"><b>2 slides still contain a client name as plain text</b>
-      Tokenising deliberately skipped these because the generated decks did not
-      prove the value was dynamic. Bind them or edit the slide, or every deck
-      ships with the wrong client on it.</div>
-    <div class="notice warn" id="lib-warn"></div>
     <div class="grid" id="lib-grid"></div>
   </div>
 </section>
 
-<section class="screen on" id="screen-rules">
+<section class="screen" id="screen-rules">
   <div class="cols">
     <div class="panel">
       <h2>Not in the deck <span class="count" id="pool-count"></span></h2>
@@ -217,14 +273,21 @@ td.used{color:var(--muted);font-size:12.5px;white-space:nowrap}
 
 </main>
 
+<!-- Collapsed by default: the slides are what an author is judging, and an
+     always-open answer panel takes a quarter of the screen away from them.
+     The tally stays visible collapsed, so the deck size is never hidden. -->
 <div class="testbar" id="testbar">
   <div class="head">
-    <span class="lab">Test drive</span>
+    <button class="toggle" id="inputs-toggle" aria-expanded="false">
+      <span class="caret">&#9650;</span> Inputs <span class="badge" id="inputs-n"></span>
+    </button>
+    <label class="preset" id="preset-wrap">Load answers
+      <select id="preset"></select></label>
     <span style="font-size:12px;color:var(--muted)" id="test-hint"></span>
     <span class="tally"><b id="tally">0</b> slides in this deck
       <span style="color:var(--muted)" id="tally-off"></span></span>
   </div>
-  <div class="body" id="test-body"></div>
+  <div class="body" id="test-body" hidden></div>
 </div>
 
 <!-- Real fields and values, if tools/make_ui_catalogue.py has been run.
@@ -456,8 +519,9 @@ function editorHTML(row){
 function renderTest(){
   const used = [];
   DECK.forEach(r => { if(r.when && !used.includes(r.when.field)) used.push(r.when.field); });
+  document.getElementById("inputs-n").textContent = used.length;
   document.getElementById("test-hint").textContent = used.length
-    ? `${used.length} answer(s) affect this deck`
+    ? "the answers that can change this deck"
     : "no conditions yet - every slide is always in";
   document.getElementById("test-body").innerHTML = used.map(f => {
     const spec = FIELDS[f] || {};
@@ -528,18 +592,66 @@ function renderMapping(){
   document.getElementById("map-count").textContent = `(${Object.keys(used).length})`;
 }
 
+/* ------------------------------------------------- library: upload + inspect
+   Step 1 of the author's workflow. The upload is the only way in, so when
+   nothing has been imported the rest of the app is hidden rather than shown
+   empty - there is no useful Rules screen without a library. */
+let IMPORTED = true;      // flip with "start over" to see the empty state
+
+function renderUpload(){
+  document.body.classList.toggle("empty", !IMPORTED);
+  document.getElementById("drop-hint").textContent = IMPORTED
+    ? "already imported - drop a new file to replace it"
+    : "start here";
+  document.getElementById("current").innerHTML = IMPORTED ? `
+    <span class="f">library.pptx</span>
+    <span class="m">${BLOCKS.length} slides &middot; imported just now</span>
+    <span class="sp"></span>
+    <button class="btn" id="reinspect">Inspect again</button>
+    <button class="btn" id="startover">Start over</button>` : "";
+}
+
+function renderInspect(){
+  const titled  = BLOCKS.filter(b => b.src === "title").length;
+  const posn    = BLOCKS.filter(b => b.src === "position").length;
+  const marked  = BLOCKS.length - titled - posn;
+  const phs     = new Set(); BLOCKS.forEach(b => (b.ph||[]).forEach(p => phs.add(p)));
+  const unbound = [...phs].filter(p => !BINDINGS[p]).length;
+  const literal = BLOCKS.filter(b => b.literal).length;
+
+  document.getElementById("stats").innerHTML = `
+    <div class="stat"><b>${BLOCKS.length}</b><span>slides found</span></div>
+    <div class="stat ok"><b>${marked}</b><span>stable ids</span></div>
+    <div class="stat ${titled?"warn":""}"><b>${titled}</b><span>named by title</span></div>
+    <div class="stat"><b>${phs.size}</b><span>placeholders</span></div>
+    <div class="stat ${unbound?"bad":"ok"}"><b>${unbound}</b><span>unbound</span></div>
+    <div class="stat"><b>${REAL ? Object.keys(FIELDS).length : 0}</b><span>payload fields</span></div>`;
+
+  const bad = document.getElementById("lib-bad");
+  bad.innerHTML = literal ? `<b>${literal} slide(s) still contain a client name as
+    plain text</b> Tokenising deliberately skipped these because the generated
+    decks did not prove the value was dynamic. Bind them or edit the slide, or
+    every deck ships with the wrong client on it.` : "";
+  bad.hidden = !literal;
+
+  const warn = document.getElementById("lib-warn");
+  warn.innerHTML = titled ? `<b>${titled} slide(s) have no stable id</b>
+    They are named by their title, so retitling the slide in PowerPoint renames
+    the block and silently breaks any rule pointing at it. Add a
+    <code>{{block:id}}</code> marker, or rename to pin it.` : "";
+  warn.hidden = !titled;
+
+  const ok = document.getElementById("lib-ok");
+  ok.innerHTML = `<b>Nothing in the deck was modified</b>
+    The file is copied verbatim; identity lives in a sidecar next to it, so a
+    firm template imports untouched and can be replaced at any time.`;
+}
+
 /* ---------------------------------------------------------------- library */
 function renderLibrary(){
-  const titled = BLOCKS.filter(b => b.src === "title").length;
+  renderUpload(); renderInspect();
   document.getElementById("lib-count").textContent = `(${BLOCKS.length})`;
   document.getElementById("hdr-count").textContent = `${BLOCKS.length} slides`;
-  const warn = document.getElementById("lib-warn");
-  if(titled){
-    warn.innerHTML = `<b>${titled} slide(s) have no stable id</b>
-      They are named by their title, so retitling the slide in PowerPoint renames
-      the block and silently breaks any rule pointing at it. Add a
-      <code>{{block:id}}</code> marker, or rename here to pin it.`;
-  } else { warn.style.display = "none"; }
   document.getElementById("lib-grid").innerHTML = BLOCKS.map(b => `
     <div class="card">${thumb(b,"lg")}
       <div class="t" title="${esc(b.t)}">${esc(b.t)}</div>
@@ -554,13 +666,61 @@ function renderLibrary(){
 }
 
 /* ------------------------------------------------------------------ events */
-document.querySelectorAll(".tabs button").forEach(btn => btn.onclick = () => {
-  document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b === btn));
-  const tab = btn.dataset.tab;
+function showTab(tab){
+  document.querySelectorAll(".tabs button").forEach(b =>
+    b.classList.toggle("on", b.dataset.tab === tab));
   document.querySelectorAll(".screen").forEach(s =>
     s.classList.toggle("on", s.id === "screen-" + tab));
-  document.getElementById("testbar").style.display = tab === "rules" ? "" : "none";
-  document.querySelector("main").style.paddingBottom = tab === "rules" ? "30vh" : "30px";
+  document.getElementById("testbar").hidden = (tab !== "rules");
+  fitMain();
+}
+document.querySelectorAll(".tabs button").forEach(btn =>
+  btn.onclick = () => showTab(btn.dataset.tab));
+
+/* keep the page clear of the bar, whatever height it currently is */
+function fitMain(){
+  const bar = document.getElementById("testbar");
+  document.querySelector("main").style.paddingBottom =
+    bar.hidden ? "30px" : (bar.offsetHeight + 24) + "px";
+}
+
+/* -------------------------------------------------------- inputs collapse */
+const bar = document.getElementById("testbar");
+document.getElementById("inputs-toggle").onclick = function(){
+  const open = bar.classList.toggle("open");
+  document.getElementById("test-body").hidden = !open;
+  this.setAttribute("aria-expanded", open ? "true" : "false");
+  fitMain();
+};
+
+/* -------------------------------------------------------- preset answers */
+const PRESETS = DATA.presets || [];
+(function(){
+  const wrap = document.getElementById("preset-wrap");
+  if(!PRESETS.length){ wrap.hidden = true; return; }
+  document.getElementById("preset").innerHTML =
+    `<option value="">choose a payload…</option>` +
+    PRESETS.map((p,i) => `<option value="${i}">${esc(p.label)}</option>`).join("");
+})();
+document.getElementById("preset").onchange = function(){
+  if(this.value === "") return;
+  ANSWERS = {...PRESETS[this.value].answers};
+  redraw();
+  if(!bar.classList.contains("open"))
+    document.getElementById("inputs-toggle").click();   // show what was loaded
+};
+
+/* ------------------------------------------------------- upload (simulated) */
+const dz = document.getElementById("dropzone");
+["dragenter","dragover"].forEach(ev => dz.addEventListener(ev, e => {
+  e.preventDefault(); dz.classList.add("over"); }));
+["dragleave","drop"].forEach(ev => dz.addEventListener(ev, e => {
+  e.preventDefault(); dz.classList.remove("over"); }));
+dz.addEventListener("drop", () => { IMPORTED = true; renderLibrary(); });
+document.getElementById("choose").onclick = () => { IMPORTED = true; renderLibrary(); };
+document.addEventListener("click", e => {
+  if(e.target.id === "startover"){ IMPORTED = false; renderLibrary(); }
+  if(e.target.id === "reinspect"){ renderLibrary(); }
 });
 
 document.getElementById("pool-search").oninput = renderPool;
@@ -653,7 +813,8 @@ badge.textContent = REAL
   : "MOCKUP · synthetic data";
 badge.classList.toggle("real", REAL);
 
-renderLibrary(); renderMapping(); redraw();
+renderLibrary(); renderMapping(); redraw(); showTab("library");
+window.addEventListener("resize", fitMain);
 </script>
 </body>
 </html>
