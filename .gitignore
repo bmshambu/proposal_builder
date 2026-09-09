@@ -19,3 +19,6 @@ venv/
 
 # keep the empty folders
 !data/**/.gitkeep
+
+# generated from confidential payloads by tools/make_ui_catalogue.py
+ppt_gen_v2/ui/catalogue.js

@@ -164,6 +164,38 @@ Then the screen is two columns, left driven entirely by the library:
   ship with `{{...}}` visible); bound but unused = grey (harmless, probably a
   leftover).
 
+## What the real payloads changed
+
+The first mockup used tidy field names - `AuditType`, `City` - and looked fine.
+The real payloads have 20 fields and do not look like that:
+
+| Real | The mockup had assumed |
+|---|---|
+| field names up to **88 characters**, because they are whole form questions | short identifiers |
+| one field name **with spaces** in it | identifier-shaped names |
+| **31** sub-sectors, **21** cities, **11** sectors | a menu of four |
+| booleans are real JSON `false` | the strings `"true"`/`"false"` |
+| one field **never varies** (always `"Accept"`) | every field is a usable condition |
+
+The model was fine throughout - `flatten()` handles all of it, and `_same()`
+already compares `False` to `"false"` correctly. It was the *screen* that broke.
+So the mockup now:
+
+- lets the condition row take the remaining width and truncates the **label**,
+  never the value: `Expansion of Services` is the part that says what a rule
+  does, and the full question stays in the tooltip and in the editor,
+- shows the exact field name in the editor, in monospace, so there is no doubt
+  what gets written to `rules.json`,
+- uses a type-to-filter list once a field has more than 12 known values,
+- writes real booleans rather than the string `"true"`,
+- refuses to pretend a field that never varies is a usable condition, matching
+  what `propose.py` already refuses to infer from.
+
+`tools/make_ui_catalogue.py` builds this from the payloads into
+`ui/catalogue.js`, which is **gitignored** - the payloads are confidential. The
+mockup falls back to synthetic data when the file is absent, so a fresh clone
+still opens.
+
 ## The risk, stated plainly
 
 Inference had an oracle: 70 decks Templafy really produced. Hand-authored rules
