@@ -215,6 +215,49 @@ def anchors_from_deck_orders(orders, block_decks):
     return anchors
 
 
+def consensus_order(orders, fallback):
+    """Order the blocks the way the decks themselves order them.
+
+    The library's order is an artifact of the merge, not evidence. A block a
+    later deck introduced lands wherever the merge put it, which need not be
+    where any deck had it -- and one block sitting a few places off is invisible
+    in the library while showing up as "1 slide out of order" on every single
+    deck, baseline included. That is not a conditional-block problem, so no
+    amount of fixing `insert_after` touches it.
+
+    The decks are the authority. Each deck orders the blocks it contains; taken
+    together they are a precedence graph, and a topological sort of it is an
+    order every deck agrees with. Where the decks say nothing -- two blocks that
+    never appear in the same deck -- `fallback` (the library) breaks the tie, so
+    the result stays deterministic.
+
+    If the decks genuinely disagree, the graph has a cycle. We break it by
+    falling back for that one choice rather than failing: a slightly wrong order
+    is reportable by `verify`, while a crash leaves the author with nothing.
+    """
+    rank = {bid: i for i, bid in enumerate(fallback)}
+    after = {bid: set() for bid in fallback}      # bid -> blocks that precede it
+    for order in orders:
+        known = [b for b in order if b in rank]
+        for i, earlier in enumerate(known):
+            for later in known[i + 1:]:
+                after[later].add(earlier)
+
+    out, placed = [], set()
+    remaining = set(fallback)
+    while remaining:
+        ready = [b for b in remaining if not (after[b] - placed)]
+        if not ready:
+            # the decks contradict each other here; take the library's word for
+            # this one block and carry on, so the disagreement costs one
+            # position rather than the whole ordering
+            ready = list(remaining)
+        pick = min(ready, key=lambda b: rank[b])
+        out.append(pick)
+        placed.add(pick)
+        remaining.discard(pick)
+    return out
+
 def propose_from_provenance(template, payloads_dir, decks_dir=None):
     """Rebuild rules.json for a merged template. -> report dict.
 
@@ -250,12 +293,18 @@ def propose_from_provenance(template, payloads_dir, decks_dir=None):
     # deck - so say so rather than presenting it as evidence.
     recorded = {bid: (blocks[bid] or {}).get("after")
                 for bid in block_decks if (blocks[bid] or {}).get("after")}
-    recovered, unreadable, matching = {}, [], None
+    recovered, unreadable, matching, reordered = {}, [], None, 0
     if decks_dir:
         # the decks themselves are the authority, and reading them costs
         # nothing next to rebuilding the library
         orders, unreadable, matching = recover_anchors(template, decks_dir)
         recovered = anchors_from_deck_orders(orders, block_decks)
+        # ...for the baseline's own order too, not only for the anchors. The
+        # baseline is every deck's spine, so a block out of place in it is out
+        # of place in every deck we build.
+        consensus = consensus_order(orders, order)
+        reordered = sum(1 for a, b in zip(order, consensus) if a != b)
+        order = consensus
     anchors = derive_anchors(order, block_decks)
     anchors.update(recovered)
     anchors.update(recorded)
@@ -309,6 +358,7 @@ def propose_from_provenance(template, payloads_dir, decks_dir=None):
     return {"baseline": len(baseline), "conditional": len(rule_blocks),
             "unanchored": unanchored, "unpaired_decks": unpaired,
             "stale_blocks": stale, "notes": notes,
+            "reordered": reordered,
             "anchors_from_decks": sum(1 for b in rule_blocks if b in from_decks),
             "anchors_guessed": sum(1 for b in rule_blocks
                                    if b not in from_decks and b not in unanchored),

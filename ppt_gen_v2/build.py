@@ -324,7 +324,23 @@ def cmd_verify(args):
     print("   %d have the right slides (no slide missing or extra)"
           % report["selection_ok"])
     print("   %d have them in the right order" % ordered)
-    print("   the rest differ only in text - see the lines above")
+    text_only = sum(1 for r in report["results"]
+                    if r.get("selection_ok") and r.get("order_ok")
+                    and r.get("text_differs"))
+    if text_only:
+        print("   %d differ only in text - see the lines above" % text_only)
+
+    # "one slide out of order" on every deck is nearly always the SAME slide,
+    # and naming it is the whole diagnosis. Printing it takes one line, so it
+    # should not be hidden behind -v: without it the next step is another run.
+    if ordered < report["compared"]:
+        blamed = {}
+        for row in report["results"]:
+            for d in row.get("displaced", []):
+                key = d["block"] or ("slide #%s" % d["templafy_index"])
+                blamed[key] = blamed.get(key, 0) + 1
+        for name, n in sorted(blamed.items(), key=lambda kv: -kv[1])[:5]:
+            print("   out of place on %d deck(s): %s" % (n, name))
     if report["unpaired_decks"]:
         print("  ! %d deck(s) had no payload: %s"
               % (len(report["unpaired_decks"]),
@@ -359,6 +375,10 @@ def cmd_rules(args):
     if report["anchors_from_decks"]:
         print("  %d block(s) placed from the decks' own slide order"
               % report["anchors_from_decks"])
+    if report.get("reordered"):
+        print("  %d block(s) moved: the decks order them differently from the"
+              % report["reordered"])
+        print("    library, and the decks are the authority")
     if report["anchors_guessed"]:
         print("  ! %d block(s) placed from library order, not from the decks -"
               % report["anchors_guessed"])

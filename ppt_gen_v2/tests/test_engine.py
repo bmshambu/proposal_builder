@@ -29,6 +29,7 @@ from engine import (Library, Rules, Template, build,          # noqa: E402
                     build_template, find_template, import_deck, list_templates)
 from engine import bindings, ooxml as ooxmlmod, placeholders  # noqa: E402
 from engine import report as reportmod                        # noqa: E402
+from engine import propose                                    # noqa: E402
 from engine import svg as svgmod                              # noqa: E402
 from engine import tokenise as tokenisemod                    # noqa: E402
 from engine.assemble import AssemblyError                     # noqa: E402
@@ -1894,6 +1895,46 @@ class TestReport(EngineTestCase):
         self.assertIn("Before sharing", doc)
         self.assertIn("--redact", doc)
 
+
+
+class TestConsensusOrder(unittest.TestCase):
+    """The decks order the blocks, not the library.
+
+    A block the merge placed a few positions off is invisible in the library
+    and shows up as "1 slide out of order" on every deck built from it -
+    baseline decks included, which is what rules out `insert_after` as the
+    cause.
+    """
+
+    def test_the_decks_order_wins_over_the_library(self):
+        library = ["cover", "about", "scope", "team", "fees", "close"]
+        decks = [["cover", "about", "scope", "fees", "team", "close"]] * 5
+        self.assertEqual(
+            propose.consensus_order(decks, library),
+            ["cover", "about", "scope", "fees", "team", "close"])
+
+    def test_blocks_the_decks_never_pair_keep_library_order(self):
+        # no deck contains both, so there is no evidence either way: the
+        # library breaks the tie rather than the dict's iteration order
+        order = propose.consensus_order([["cover", "close"]],
+                                        ["cover", "a", "b", "close"])
+        self.assertLess(order.index("a"), order.index("b"))
+
+    def test_decks_that_contradict_each_other_do_not_hang(self):
+        order = propose.consensus_order([["a", "b"], ["b", "a"]], ["a", "b"])
+        self.assertEqual(sorted(order), ["a", "b"])
+
+    def test_every_block_survives_exactly_once(self):
+        library = ["s%d" % i for i in range(12)]
+        decks = [library[::2], library[1::2], list(reversed(library[:4]))]
+        order = propose.consensus_order(decks, library)
+        self.assertEqual(sorted(order), sorted(library))
+
+    def test_it_is_deterministic(self):
+        library = ["cover", "about", "scope", "team", "fees", "close"]
+        decks = [["cover", "scope", "fees", "team"], ["cover", "about", "close"]]
+        runs = {tuple(propose.consensus_order(decks, library)) for _ in range(20)}
+        self.assertEqual(len(runs), 1)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
