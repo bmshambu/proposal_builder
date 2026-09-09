@@ -1181,6 +1181,80 @@ class TestMasterMerge(EngineTestCase):
                    if s.get("insert_after") in blocks]
         self.assertTrue(chained, "expected one block to anchor to another")
 
+    # -- rebuilding the rules without re-merging --------------------------
+    def _wipe_rules(self, folder):
+        """Lose the rules exactly as the real template did, keeping the
+        placeholder bindings that tokenising put there."""
+        tpl = Template(folder)
+        rules = json.load(open(tpl.rules_path, encoding="utf-8"))
+        rules["blocks"] = {}
+        with tpl.open_library() as lib:
+            rules["baseline"] = [b.id for b in lib.ordered()]
+        with open(tpl.rules_path, "w", encoding="utf-8") as fh:
+            json.dump(rules, fh)
+        return tpl
+
+    def test_the_merge_records_where_each_block_sat(self):
+        """Library order cannot reproduce it: a block a later deck introduced
+        sits at the end of the library wherever it sat in its own deck."""
+        self.merge("--tokenise")
+        prov = json.load(open(os.path.join(self.roots, "merged",
+                                           "provenance.json"), encoding="utf-8"))
+        anchored = {b: i.get("after") for b, i in prov["blocks"].items()
+                    if i.get("after")}
+        self.assertTrue(anchored)
+
+    def test_rules_can_be_rebuilt_from_provenance_alone(self):
+        """Re-running the merge would rebuild a library PowerPoint has only
+        just agreed to open. The evidence is already on disk."""
+        from engine import propose
+        self.merge("--tokenise")
+        folder = os.path.join(self.roots, "merged")
+        before = json.load(open(Template(folder).rules_path, encoding="utf-8"))
+        self._wipe_rules(folder)
+
+        report = propose.propose_from_provenance(Template(folder), self.pays)
+        after = json.load(open(Template(folder).rules_path, encoding="utf-8"))
+        self.assertEqual(sorted(after["blocks"]), sorted(before["blocks"]))
+        self.assertEqual(after["baseline"], before["baseline"])
+        self.assertEqual(report["conditional"], len(before["blocks"]))
+
+    def test_rebuilding_the_rules_keeps_the_placeholder_bindings(self):
+        """They come from tokenising the library and have nothing to do with
+        slide selection. Losing them turns a template back into a snapshot."""
+        from engine import propose
+        self.merge("--tokenise")
+        folder = os.path.join(self.roots, "merged")
+        bound = json.load(open(Template(folder).rules_path,
+                               encoding="utf-8"))["placeholders"]
+        self.assertTrue(bound)
+        self._wipe_rules(folder)
+        propose.propose_from_provenance(Template(folder), self.pays)
+        after = json.load(open(Template(folder).rules_path, encoding="utf-8"))
+        self.assertEqual(after["placeholders"], bound)
+
+    def test_rebuilt_anchors_come_from_the_decks_not_library_order(self):
+        from engine import propose
+        self.merge("--tokenise")
+        folder = os.path.join(self.roots, "merged")
+        self._wipe_rules(folder)
+        report = propose.propose_from_provenance(Template(folder), self.pays)
+        self.assertEqual(report["anchors_guessed"], 0)
+        blocks = json.load(open(Template(folder).rules_path,
+                                encoding="utf-8"))["blocks"]
+        for spec in blocks.values():
+            self.assertNotIn("_confirm_position", spec)
+
+    def test_a_rebuilt_template_still_builds_the_right_deck(self):
+        from engine import propose
+        self.merge("--tokenise")
+        folder = os.path.join(self.roots, "merged")
+        self._wipe_rules(folder)
+        propose.propose_from_provenance(Template(folder), self.pays)
+        built = build_template(Template(folder), self.cases["01_expansion"],
+                               self.out("rebuilt_rules.pptx"))
+        self.assertEqual(built["slides"], 8, "not every slide, only the right ones")
+
     # -- tokenising -------------------------------------------------------
     def test_without_tokenising_the_library_is_one_client_snapshot(self):
         """Generated decks have their values already substituted. Saying so is

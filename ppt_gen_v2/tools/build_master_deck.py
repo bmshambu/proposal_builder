@@ -971,8 +971,16 @@ def main(argv=None):
                               for b, (p, t, _d, _h) in zip(ids, blocks)}},
                   fh, indent=2, ensure_ascii=False)
 
+    # worked out from each deck's own slide order, and recorded below
+    anchors = merger.anchors(ids)
+
+    # The anchor is worked out from each deck's own slide order, which the
+    # library cannot reproduce: a block introduced by a later deck sits at the
+    # end of the library regardless of where it sat in its deck. Recording it
+    # here is what lets the rules be rebuilt later without re-merging.
     provenance = {b: {"title": t, "slide": os.path.basename(p),
-                      "identified_by": h, "deck_count": len(d), "decks": d}
+                      "identified_by": h, "deck_count": len(d), "decks": d,
+                      "after": anchors.get(b)}
                   for b, (p, t, d, h) in zip(ids, blocks)}
     with open(os.path.join(folder, "provenance.json"), "w", encoding="utf-8") as fh:
         json.dump({"_comment": "Which generated decks each slide came from. "
@@ -985,7 +993,6 @@ def main(argv=None):
         proposals, notes = propose_rules(ids, blocks, payloads)
 
     baseline = [b for b in ids if b not in proposals]
-    anchors = merger.anchors(ids)
     rule_blocks, unanchored = {}, []
     for bid, info in proposals.items():
         rule_blocks[bid] = {

@@ -9,6 +9,7 @@
     python build.py check   office                        # write report.md
     python build.py reconcile office                      # re-key blocks.json
     python build.py tokenise  office --payload p.json     # put {{placeholders}} back
+    python build.py rules     office --payloads data/payloads  # re-propose rules
     python build.py make    office --answers a.json --out out/deck.pptx
 
 Adding a template is a file operation — drop a folder under templates/, or run
@@ -209,6 +210,47 @@ def cmd_tokenise(args):
     return 0
 
 
+# ---------------------------------------------------------------- rules
+def cmd_rules(args):
+    """Re-derive the rule proposals from provenance.json, without re-merging.
+
+    A merged template records which decks each slide came from. Paired with the
+    payloads that produced those decks, that says *why* each slide was there -
+    which is the rules. Rebuilding them from that evidence avoids re-running
+    the merge and risking a library PowerPoint is finally happy with.
+    """
+    from engine import propose
+
+    tpl = resolve(args)
+    report = propose.propose_from_provenance(tpl, args.payloads)
+
+    print("Rewrote %s" % os.path.basename(tpl.rules_path))
+    print("  %d baseline (in every deck), %d conditional (proposed)"
+          % (report["baseline"], report["conditional"]))
+    print("  %d placeholder binding(s) kept" % report["placeholders_kept"])
+    if report["anchors_guessed"]:
+        print("  ! %d block(s) placed from library order, not from the decks -"
+              % report["anchors_guessed"])
+        print("    provenance.json predates the merge recording anchors, so")
+        print("    their position is a guess. Marked _confirm_position.")
+    if report["unpaired_decks"]:
+        print("  ! no payload matched %d deck(s): %s"
+              % (len(report["unpaired_decks"]),
+                 ", ".join(report["unpaired_decks"][:5])))
+    if report["stale_blocks"]:
+        print("  ! %d block(s) in provenance are not in the library: %s"
+              % (len(report["stale_blocks"]), ", ".join(report["stale_blocks"][:5])))
+    for bid in report["unanchored"]:
+        print("  ? %s has no stable block before it - it will be appended" % bid)
+    for note in report["notes"]:
+        print("  ? %s" % note)
+    print("")
+    print("These are proposals. Confirm them before building for a client:")
+    print("  python build.py check   %s" % tpl.name)
+    print("  python build.py preview %s" % tpl.name)
+    return 0
+
+
 # ---------------------------------------------------------------- reconcile
 def cmd_reconcile(args):
     """Re-key blocks.json after the library deck has been rewritten.
@@ -387,6 +429,12 @@ def main(argv=None):
                     help="the payload whose values are baked into these slides")
     tk.add_argument("--no-backup", action="store_true")
 
+    ru = sub.add_parser("rules",
+                        help="re-propose rules from provenance.json + payloads")
+    ru.add_argument("template")
+    ru.add_argument("--payloads", required=True,
+                    help="folder of the payloads that generated the decks")
+
     rc = sub.add_parser("reconcile",
                         help="re-key blocks.json after the library was rewritten")
     rc.add_argument("template")
@@ -419,7 +467,7 @@ def main(argv=None):
                "rename": cmd_rename, "make": cmd_make,
                "preview": cmd_preview, "check": cmd_check,
                "reconcile": cmd_reconcile, "tokenise": cmd_tokenise,
-               "tokenize": cmd_tokenise}[args.cmd]
+               "tokenize": cmd_tokenise, "rules": cmd_rules}[args.cmd]
     try:
         return handler(args)
     except (AssemblyError, RulesError, LibraryError, TemplateError) as exc:

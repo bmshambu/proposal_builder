@@ -125,6 +125,20 @@ a much bigger risk once PowerPoint is happy with it.
 Review what it replaced: a value can be a real answer in one place and ordinary
 wording in another — v1 hit exactly this with "New York".
 
+### Rebuilding the rules without re-merging
+
+`provenance.json` records which decks each block came from, and where it sat.
+Paired with the payloads, that is the evidence behind the rules — so they can be
+rebuilt for a template that already exists:
+
+```bash
+python build.py rules firm --payloads ../data/payloads
+```
+
+Placeholder bindings are preserved: they come from tokenising the library and
+have nothing to do with slide selection. Anything no single answer explains
+stays in the baseline and is reported, rather than guessed at.
+
 ### After the library deck is rewritten
 
 `blocks.json` is keyed by slide *part name*, so anything that renumbers parts —
