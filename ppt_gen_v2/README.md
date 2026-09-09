@@ -122,8 +122,21 @@ refreshes the titles recorded in `blocks.json` (substitution changes the very
 text a title is read from). Re-merging would rebuild the package from scratch —
 a much bigger risk once PowerPoint is happy with it.
 
-Review what it replaced: a value can be a real answer in one place and ordinary
-wording in another — v1 hit exactly this with "New York".
+**Pass the decks and let them decide.** A value can be a real answer in one
+place and ordinary wording in another — v1 hit exactly this with "New York",
+and replacing it blindly makes every city deck say "Atlanta" where the office
+address should stay "New York":
+
+```bash
+python build.py tokenise firm --payload ../data/payloads/00_baseline.json        --decks ../data/decks --payloads ../data/payloads --from-backup
+```
+
+With `--decks`, each literal is classified from the evidence: a slide that
+still reads "New York" when the payload said Atlanta is not showing the city
+field, whatever it looks like. Only literals that track the answer on *every*
+deck are replaced; the rest are left as text and reported. `--from-backup`
+restores `library.pptx.before-tokenise` first, so an earlier blind run can be
+redone.
 
 ### Rebuilding the rules without re-merging
 

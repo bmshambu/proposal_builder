@@ -181,7 +181,42 @@ def cmd_tokenise(args):
 
     tpl = resolve(args)
     payload = read_json(args.payload)
-    report = tk.tokenise_library(tpl, payload, backup=not args.no_backup)
+
+    if args.from_backup:
+        saved = tpl.library_path + ".before-tokenise"
+        if not os.path.exists(saved):
+            print("No %s to restore from." % os.path.basename(saved))
+            return 2
+        import shutil
+        shutil.copy(saved, tpl.library_path)
+        print("Restored the library from %s" % os.path.basename(saved))
+
+    classification = None
+    if args.decks and args.payloads:
+        # The decks are the evidence: a slide still reading "New York" when the
+        # payload said Atlanta is not showing the city field, whatever it looks
+        # like. Guessing that is how a template ends up substituting a city
+        # into an office address.
+        token_map = tk.guess_token_map(payload)
+        classification = tk.classify_literals(tpl, args.decks, args.payloads,
+                                              token_map)
+        counts = {}
+        for info in classification.values():
+            counts[info["verdict"]] = counts.get(info["verdict"], 0) + 1
+        print("Evidence from the decks: %s"
+              % ", ".join("%s %d" % kv for kv in sorted(counts.items())))
+        for (bid, field), info in sorted(classification.items()):
+            if info["verdict"] in ("static", "mixed"):
+                print("   %-8s %-28s %s (%d/%d decks, %d values)"
+                      % (info["verdict"], bid, field, info["hits"],
+                         info["decks"], info["values"]))
+    else:
+        print("No --decks/--payloads given, so every occurrence is replaced.")
+        print("That is the mistake v1 warned about: a value can be a real")
+        print("answer in one place and ordinary wording in another.")
+
+    report = tk.tokenise_library(tpl, payload, backup=not args.no_backup,
+                                 classification=classification)
 
     hits = report["replacements"]
     if not hits:
@@ -193,6 +228,10 @@ def cmd_tokenise(args):
     print("Restored placeholders in %d slide(s):" % report["slides_changed"])
     for literal, n in sorted(hits.items(), key=lambda kv: -kv[1]):
         print("   %-36s %3d occurrence(s)" % ('"%s"' % literal[:34], n))
+    if report.get("skipped"):
+        print("   left alone as static text: %s"
+              % ", ".join("%s on %d slide(s)" % (f, n)
+                          for f, n in sorted(report["skipped"].items())))
     if report["backup"]:
         print("   previous library kept at %s" % os.path.basename(report["backup"]))
 
@@ -523,6 +562,12 @@ def main(argv=None):
     tk.add_argument("template")
     tk.add_argument("--payload", required=True,
                     help="the payload whose values are baked into these slides")
+    tk.add_argument("--decks", help="source decks, as evidence for which "
+                                    "literals actually vary")
+    tk.add_argument("--payloads", help="the payloads that produced those decks")
+    tk.add_argument("--from-backup", action="store_true",
+                    help="restore library.pptx.before-tokenise first, to redo "
+                         "an earlier tokenising")
     tk.add_argument("--no-backup", action="store_true")
 
     bd = sub.add_parser("bind", help="bind a placeholder to an answer field")

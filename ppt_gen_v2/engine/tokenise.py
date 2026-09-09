@@ -117,7 +117,96 @@ def bindings_for(token_map, formats):
     return out
 
 
-def tokenise_library(template, payload, token_map=None, backup=True):
+def classify_literals(template, decks_dir, payloads_dir, token_map):
+    """Which literals actually vary with the answers, slide by slide.
+
+    Replacing "New York" with `{{City}}` everywhere it appears is the mistake v1
+    warned about: on some slides it is the city answer, on others it is a static
+    office address in the boilerplate. Guessing which is which is unnecessary —
+    the generated decks are the evidence. A slide that still says "New York"
+    when the payload said Atlanta is not showing the city field.
+
+    -> {(block id, field): {"verdict", "decks", "hits", "values"}} where verdict
+    is `dynamic` (tracks the answer on every deck), `static` (never does),
+    `mixed` (only on some — which is what a static "New York" looks like, since
+    it matches in the one deck whose answer was also New York), or `unknown`
+    (the answer never varied across these decks, so they cannot say).
+
+    Only `dynamic` is treated as evidence for replacing. Anything less and the
+    slide is left as it is: a placeholder that should have stayed text is a
+    wrong deck, while text that should have been a placeholder is a visible gap
+    someone notices.
+    """
+    import glob
+
+    from . import forensics as pf
+    from .propose import load_payloads
+
+    with template.open_library() as lib:
+        blocks = lib.ordered()
+    lib_deck = pf.load_deck(template.library_path)
+    # exact creationId sets, and only where they name one block: two blocks
+    # sharing a set would already have merged, so a collision means the key is
+    # not identifying anything
+    seen = {}
+    for block, slide in zip(blocks, lib_deck["slides"]):
+        cids = frozenset(slide["shape_creation_ids"])
+        if cids:
+            seen.setdefault(cids, []).append(block.id)
+    by_cids = {k: v[0] for k, v in seen.items() if len(v) == 1}
+
+    decks = {os.path.splitext(os.path.basename(p))[0]: p
+             for p in sorted(glob.glob(os.path.join(str(decks_dir), "*.pptx")))
+             if not os.path.basename(p).startswith("~$")}
+    payloads, _unpaired = load_payloads(payloads_dir, sorted(decks))
+
+    observations = {}
+    for label, payload in payloads.items():
+        deck = pf.load_deck(decks[label])
+        for slide in deck["slides"]:
+            bid = by_cids.get(frozenset(slide["shape_creation_ids"]))
+            if bid is None:
+                continue
+            text = slide["text"] or ""
+            for field in token_map:
+                value = payload.get(field)
+                if value in (None, "", True, False):
+                    continue
+                rec = observations.setdefault((bid, field),
+                                              {"values": set(), "hits": 0,
+                                               "decks": 0})
+                rec["values"].add(str(value))
+                rec["decks"] += 1
+                if _appears(text, str(value)):
+                    rec["hits"] += 1
+
+    out = {}
+    for key, rec in observations.items():
+        if len(rec["values"]) <= 1:
+            verdict = "unknown"          # the answer never varied: no evidence
+        elif rec["hits"] == rec["decks"]:
+            verdict = "dynamic"
+        elif rec["hits"] == 0:
+            verdict = "static"
+        else:
+            verdict = "mixed"            # tracks the answer on some decks only
+        out[key] = {"verdict": verdict, "decks": rec["decks"],
+                    "hits": rec["hits"], "values": len(rec["values"])}
+    return out
+
+
+def _appears(text, literal):
+    """Whole-word containment, matching how substitution itself works."""
+    if len(literal) < MIN_TOKEN_LEN:
+        return False
+    variants = date_formats(literal)
+    candidates = set(variants.values()) if variants else {literal}
+    return any(re.search(r'(?<!\w)' + re.escape(c) + r'(?!\w)', text)
+               for c in candidates if len(c) >= MIN_TOKEN_LEN)
+
+
+def tokenise_library(template, payload, token_map=None, backup=True,
+                     classification=None):
     """Rewrite a template's library, restoring placeholders. -> report dict.
 
     Only slide parts are touched, and only the text inside `<a:t>`. Every other
@@ -129,13 +218,14 @@ def tokenise_library(template, payload, token_map=None, backup=True):
     reps = replacements(payload, token_map)
     if not reps:
         return {"replacements": {}, "map": token_map, "formats": {},
-                "slides_changed": 0, "backup": None}
+                "slides_changed": 0, "backup": None, "skipped": {}}
 
     path = template.library_path
     with Library(path) as lib:
         slide_parts = set(lib.slide_parts)
+        block_of = {b.part: b.id for b in lib.ordered()}
 
-    totals, fmt_counts, changed = {}, {}, 0
+    totals, fmt_counts, changed, skipped = {}, {}, 0, {}
     source = zipfile.ZipFile(path)
     staged = path + ".tokenising"
     try:
@@ -144,7 +234,26 @@ def tokenise_library(template, payload, token_map=None, backup=True):
                 data = source.read(info.filename)
                 if info.filename in slide_parts:
                     xml = data.decode("utf-8", "ignore")
-                    new_xml, hits, formats = tokenise_part(xml, reps)
+                    # Leave alone the literals the decks show are static on
+                    # this slide: replacing those is how a template ends up
+                    # substituting a city into an office address.
+                    slide_reps = reps
+                    if classification is not None:
+                        bid = block_of.get(info.filename)
+                        slide_reps = []
+                        for rep in reps:
+                            verdict = (classification.get((bid, rep[2])) or {}
+                                       ).get("verdict", "unknown")
+                            # `mixed` is the "New York" case exactly: the
+                            # slide contains the value only in the deck whose
+                            # answer happens to equal the static text. Anything
+                            # short of tracking the answer on every deck is not
+                            # evidence that it is dynamic.
+                            if verdict in ("static", "mixed"):
+                                skipped[rep[2]] = skipped.get(rep[2], 0) + 1
+                                continue
+                            slide_reps.append(rep)
+                    new_xml, hits, formats = tokenise_part(xml, slide_reps)
                     if hits:
                         data = new_xml.encode("utf-8")
                         changed += 1
@@ -168,7 +277,7 @@ def tokenise_library(template, payload, token_map=None, backup=True):
     retitled = _refresh_recorded_titles(template)
 
     return {"replacements": totals, "map": token_map,
-            "formats": chosen_formats(fmt_counts),
+            "formats": chosen_formats(fmt_counts), "skipped": skipped,
             "slides_changed": changed, "retitled": retitled, "backup": saved}
 
 

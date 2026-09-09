@@ -1554,6 +1554,127 @@ class TestTokeniseLibrary(EngineTestCase):
         self.assertEqual(report["slides_changed"], 0)
 
 
+# ---------------------------------------------------------------- evidence
+_CREATION_ID = ('<a:extLst><a:ext uri="{FF2B5EF4-FFF2-40B4-BE49-F238E27FC236}">'
+                '<a16:creationId xmlns:a16="http://schemas.microsoft.com/office/'
+                'drawing/2014/main" id="{%s}"/></a:ext></a:extLst>')
+
+
+class TestTokeniseEvidence(EngineTestCase):
+    """Which literals are really dynamic, decided by the decks rather than
+    guessed.
+
+    On the real template, tokenising replaced "New York" everywhere it appeared.
+    Two of those were a static office address, so every city deck then said
+    "Atlanta" where Templafy correctly says "New York". v1 warned about exactly
+    this; the 70 generated decks settle it.
+    """
+
+    def setUp(self):
+        work = tempfile.mkdtemp(prefix="pptgen2_ev_", dir=self.tmp)
+        self.decks = os.path.join(work, "decks")
+        self.pays = os.path.join(work, "payloads")
+        self.folder = os.path.join(work, "firm")
+        os.makedirs(self.decks)
+        os.makedirs(self.pays)
+        shutil.copytree(DEMO, self.folder,
+                        ignore=shutil.ignore_patterns("report.md"))
+
+        # a library where each slide carries a creationId, and one slide has a
+        # STATIC "New York" office line as well as the dynamic {{City}} slide
+        authored = os.path.join(work, "authored.pptx")
+        z = zipfile.ZipFile(LIBRARY)
+        with zipfile.ZipFile(authored, "w") as out:
+            for info in z.infolist():
+                data = z.read(info.filename)
+                m = re.match(r'ppt/slides/slide(\d+)\.xml$', info.filename)
+                if m:
+                    n = int(m.group(1))
+                    extra = ("Our New York office" if n == 2
+                             else "marker %d" % n)
+                    data = z.read(info.filename).decode().replace(
+                        "</p:spTree>",
+                        '<p:sp><p:nvSpPr><p:cNvPr id="900" name="cid">%s</p:cNvPr>'
+                        '<p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody>'
+                        '<a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>%s</a:t></a:r>'
+                        '</a:p></p:txBody></p:sp></p:spTree>'
+                        % (_CREATION_ID % ("%08d-0000-0000-0000-000000000000" % n),
+                           extra), 1).encode()
+                out.writestr(info, data)
+        z.close()
+
+        self.cities = [("00_ny", "New York"), ("01_atlanta", "Atlanta"),
+                       ("02_boston", "Boston")]
+        for label, city in self.cities:
+            payload = {"FullClientName": "Example Corporation",
+                       "ShortClientName": "Example", "DueDate": "20261130",
+                       "City": city, "AuditType": "Statutory Audit"}
+            with open(os.path.join(self.pays, label + ".json"), "w") as fh:
+                json.dump(payload, fh)
+            build(authored, self.rules, payload,
+                  os.path.join(self.decks, label + ".pptx"),
+                  data_sources=self.data)
+
+        # the library is a SNAPSHOT: the New York deck, values already filled
+        shutil.copy(os.path.join(self.decks, "00_ny.pptx"),
+                    os.path.join(self.folder, "library.pptx"))
+        with open(os.path.join(self.folder, "template.json"), "w") as fh:
+            json.dump({"name": "firm", "library": "library.pptx"}, fh)
+        self.payload = json.load(
+            open(os.path.join(self.pays, "00_ny.json"), encoding="utf-8"))
+
+    def classify(self):
+        tpl = Template(self.folder)
+        return tpl, tokenisemod.classify_literals(
+            tpl, self.decks, self.pays, tokenisemod.guess_token_map(self.payload))
+
+    def _text(self):
+        with Template(self.folder).open_library() as lib:
+            return {b.id: " ".join(A_T.findall(lib.read(b.part)))
+                    for b in lib.ordered()}
+
+    def _block_with(self, needle):
+        """Block ids come from slide titles in a snapshot, so find the slide by
+        what is on it rather than by a name it may not have."""
+        for bid, text in self._text().items():
+            if needle in text:
+                return bid
+        raise AssertionError("no slide contains %r" % needle)
+
+    def test_a_slide_that_tracks_the_answer_is_dynamic(self):
+        _tpl, cls = self.classify()
+        bid = self._block_with("Local office")
+        self.assertEqual(cls[(bid, "City")]["verdict"], "dynamic")
+
+    def test_a_static_office_address_is_not_dynamic(self):
+        """It contains "New York" only in the deck whose answer was also New
+        York - which is what makes it look dynamic if you do not check."""
+        _tpl, cls = self.classify()
+        bid = self._block_with("Our New York office")
+        about = cls[(bid, "City")]
+        self.assertIn(about["verdict"], ("static", "mixed"))
+        self.assertLess(about["hits"], about["decks"])
+
+    def test_only_the_dynamic_occurrence_is_replaced(self):
+        tpl, cls = self.classify()
+        contacts = self._block_with("Local office")
+        about = self._block_with("Our New York office")
+        tokenisemod.tokenise_library(tpl, self.payload, classification=cls)
+        text = self._text()
+        self.assertIn("{{City}}", text[contacts], "the real city should be a slot")
+        self.assertIn("New York", text[about], "the office address must survive")
+        self.assertNotIn("{{City}}", text[about])
+
+    def test_without_evidence_everything_is_replaced(self):
+        """The old behaviour, and why the evidence matters: the static office
+        address becomes a placeholder too."""
+        about = self._block_with("Our New York office")
+        tokenisemod.tokenise_library(Template(self.folder), self.payload)
+        text = self._text()
+        self.assertIn("{{City}}", text[about])
+        self.assertNotIn("New York", text[about])
+
+
 # ---------------------------------------------------------------- check
 class TestReport(EngineTestCase):
     """`build.py check` is how a problem reaches us from a machine we cannot
