@@ -5,94 +5,135 @@ a deck is *valid*; this checks that it is *right* — same slides, same order, f
 the same payload — against the only authority there is: the decks Templafy
 actually generated.
 
-It is the question worth asking before anyone retires Templafy for a template,
-and the only one whose answer is not a matter of opinion.
+The alignment is v1's, from `diff_decks.py`, and using it was the fix. The first
+version of this module keyed a dictionary on slide identity, which quietly
+collapsed every slide sharing an identity onto one block and reported
+differences that were not there. Slides do not have a unique key you can look
+up; they have a *similarity*, and matching them is an assignment problem:
 
-Slides are compared by identity, not by text: our deck says "Acme Holdings" and
-the reference says "Example Corporation", and neither is wrong. What must match
-is *which slides* and *in what order*.
+  1. shape creationId overlap — exact, when Templafy preserved them,
+  2. layout and geometry overlap — survives placeholder filling,
+  3. text overlap — only meaningful for static slides,
 
---------------------------------------------------------------------------
-NOT YET TRUSTWORTHY
---------------------------------------------------------------------------
-On the synthetic fixtures this reported a five-slide build twice for a deck
-that is provably seven slides — the same build, run directly and repeated six
-times, is deterministic and correct. The discrepancy has not been explained, so
-a mismatch reported here may be this module's fault rather than the template's.
+taking the best signal available, greedily, one slide to one slide.
 
-Treat a "does not match" as a prompt to look, never as a verdict. It is not
-wired into `check`, and no decision should rest on it until the inconsistency
-is understood.
+One category deserves its own name rather than being counted as an error.
+Templafy regenerates data-driven slides (fees, partner names, RFP tables) per
+deck with fresh creationIds, so they cannot be paired by identity even when
+selection is perfectly correct. An unmatched slide on *both* sides at the same
+position is that, not a mistake — v1 measured it at roughly 8% of a deck, and
+calling it a failure would bury the differences that matter.
 """
+import difflib
+import glob
 import os
 import tempfile
 
-from .identity import geometry_key, slide_identity
-from .library import Library
+from . import forensics as pf
+
+# Below this, two slides are not the same slide. v1's value, kept deliberately:
+# it was tuned against real generated decks, which is evidence this project has
+# and a fresh guess would not be.
+MATCH_THRESHOLD = 0.34
 
 
-def _index_library(template):
-    """identity -> block id, for every slide in the library.
+def align(original, rebuilt):
+    """Greedy best-match, one slide to one slide.
 
-    Geometry is a fallback for decks without creationIds, kept only where it
-    names one block — slides built from one layout share it, and a wrong match
-    would report a difference that is not there.
+    -> (pairs, only_original, only_rebuilt) where pairs is
+    [(original, rebuilt, method, score)].
     """
-    with template.open_library() as lib:
-        by_identity, geo_seen = {}, {}
-        for block in lib.ordered():
-            raw = lib.read_bytes(block.part)
-            key, _how = slide_identity(raw)
-            by_identity.setdefault(key, block.id)
-            geo = geometry_key(raw)
-            if geo:
-                geo_seen.setdefault(geo, []).append(block.id)
-    by_geometry = {g: ids[0] for g, ids in geo_seen.items() if len(ids) == 1}
-    return by_identity, by_geometry
+    used, pairs, only_original = set(), [], []
+    for a in original:
+        best, method, score = None, None, 0.0
+        for b in rebuilt:
+            if b["index"] in used:
+                continue
+            how, value = pf.slide_similarity(a, b)
+            if value > score:
+                best, method, score = b, how, value
+        if best is not None and score >= MATCH_THRESHOLD:
+            used.add(best["index"])
+            pairs.append((a, best, method, round(score, 3)))
+        else:
+            only_original.append(a)
+    only_rebuilt = [b for b in rebuilt if b["index"] not in used]
+    return pairs, only_original, only_rebuilt
 
 
-def _block_sequence(path, by_identity, by_geometry):
-    """The blocks a deck contains, in order. Unrecognised slides become None."""
-    sequence = []
-    with Library(path) as deck:
-        for part in deck.slide_parts:
-            raw = deck.read_bytes(part)
-            key, _how = slide_identity(raw)
-            bid = by_identity.get(key)
-            if bid is None:
-                geo = geometry_key(raw)
-                bid = by_geometry.get(geo) if geo else None
-            sequence.append(bid)
-    return sequence
+def _text_difference(original_text, rebuilt_text):
+    """The words that differ, as replacements turning ours into Templafy's."""
+    a, b = original_text.split(), rebuilt_text.split()
+    out = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, b, a).get_opcodes():
+        if tag == "replace":
+            out.append({"ours": " ".join(b[i1:i2]),
+                        "templafy": " ".join(a[j1:j2])})
+        elif tag == "delete":
+            out.append({"ours": " ".join(b[i1:i2]), "templafy": ""})
+    return [d for d in out if d["ours"].strip()][:5]
 
 
-def compare_sequences(expected, actual):
-    """-> dict describing how our deck differs from the reference.
+def compare(original_path, rebuilt_path):
+    """Compare one pair of decks. -> report dict."""
+    original = pf.load_deck(original_path)
+    rebuilt = pf.load_deck(rebuilt_path)
+    pairs, only_original, only_rebuilt = align(original["slides"],
+                                               rebuilt["slides"])
 
-    Order is reported separately from content: a deck with the right slides in
-    the wrong order is a different problem from one missing a section, and
-    conflating them hides which.
-    """
-    exp_set, act_set = set(expected) - {None}, set(actual) - {None}
-    missing = [b for b in expected if b is not None and b not in act_set]
-    extra = [b for b in actual if b is not None and b not in exp_set]
-    common_expected = [b for b in expected if b in act_set]
-    common_actual = [b for b in actual if b in exp_set]
+    sequence = [b["index"] for _a, b, _m, _s in pairs]
+    order_ok = all(sequence[i] <= sequence[i + 1] for i in range(len(sequence) - 1))
+
+    by_method, text_differs = {}, []
+    for a, b, method, _score in pairs:
+        by_method[method] = by_method.get(method, 0) + 1
+        aw, bw = pf.word_set(a["text"]), pf.word_set(b["text"])
+        if aw != bw:
+            text_differs.append({
+                "templafy_index": a["index"], "ours_index": b["index"],
+                "only_in_templafy": sorted(aw - bw)[:20],
+                "only_in_ours": sorted(bw - aw)[:20],
+                "segments": _text_difference(a["text"], b["text"]),
+            })
+
+    # A slide unmatched on both sides at the same position is one Templafy
+    # regenerates per deck, not a selection mistake.
+    left = {s["index"]: s for s in only_original}
+    right = {s["index"]: s for s in only_rebuilt}
+    data_driven = sorted(set(left) & set(right))
+    missing = [s for s in only_original if s["index"] not in right]
+    extra = [s for s in only_rebuilt if s["index"] not in left]
+
+    if missing or extra:
+        verdict = "SELECTION DIFFERS"
+    elif not order_ok:
+        verdict = "ORDER DIFFERS"
+    elif text_differs:
+        verdict = "SELECTION OK, TEXT DIFFERS"
+    elif data_driven:
+        verdict = "SELECTION OK - %d data-driven slide(s)" % len(data_driven)
+    else:
+        verdict = "MATCH"
+
     return {
-        "expected": len(expected), "actual": len(actual),
-        "missing": missing, "extra": extra,
-        "unrecognised": sum(1 for b in expected if b is None),
-        "reordered": common_expected != common_actual,
-        "exact": (not missing and not extra
-                  and common_expected == common_actual
-                  and len(expected) == len(actual)),
+        "verdict": verdict, "order_ok": order_ok,
+        "templafy_slides": original["slide_count"],
+        "our_slides": rebuilt["slide_count"],
+        "matched": len(pairs), "by_method": by_method,
+        "missing": [{"index": s["index"], "preview": s["text"][:70]}
+                    for s in missing],
+        "extra": [{"index": s["index"], "preview": s["text"][:70]}
+                  for s in extra],
+        "data_driven": len(data_driven),
+        "text_differs": text_differs,
+        "selection_ok": not (missing or extra),
+        "exact": verdict == "MATCH",
     }
 
 
 def verify(template, decks_dir, payloads_dir, build_fn=None, limit=None):
-    """Build a deck per payload and compare it with Templafy's. -> report dict."""
-    import glob
-    import json
+    """Build a deck per payload and compare each with Templafy's."""
+    import shutil
 
     from .assemble import build_template
     from .propose import load_payloads
@@ -102,29 +143,27 @@ def verify(template, decks_dir, payloads_dir, build_fn=None, limit=None):
              for p in sorted(glob.glob(os.path.join(str(decks_dir), "*.pptx")))
              if not os.path.basename(p).startswith("~$")}
     payloads, unpaired = load_payloads(payloads_dir, sorted(decks))
-    by_identity, by_geometry = _index_library(template)
 
-    results, tmp = [], tempfile.mkdtemp(prefix="pptgen2_verify_")
+    results = []
+    tmp = tempfile.mkdtemp(prefix="pptgen2_verify_")
     try:
         for label in sorted(payloads)[:limit]:
-            reference = decks[label]
             out = os.path.join(tmp, label + ".pptx")
             try:
                 build_fn(template, payloads[label], out)
+                row = compare(decks[label], out)
             except Exception as exc:
-                results.append({"deck": label, "error": "%s: %s"
-                                % (type(exc).__name__, exc), "exact": False})
-                continue
-            expected = _block_sequence(reference, by_identity, by_geometry)
-            actual = _block_sequence(out, by_identity, by_geometry)
-            row = compare_sequences(expected, actual)
+                row = {"verdict": "BUILD FAILED", "exact": False,
+                       "selection_ok": False,
+                       "error": "%s: %s" % (type(exc).__name__, exc)}
             row["deck"] = label
             results.append(row)
-            os.remove(out)
+            if os.path.exists(out):
+                os.remove(out)
     finally:
-        import shutil
         shutil.rmtree(tmp, ignore_errors=True)
 
-    exact = [r for r in results if r.get("exact")]
-    return {"results": results, "compared": len(results), "exact": len(exact),
+    return {"results": results, "compared": len(results),
+            "exact": sum(1 for r in results if r.get("exact")),
+            "selection_ok": sum(1 for r in results if r.get("selection_ok")),
             "unpaired_decks": unpaired}

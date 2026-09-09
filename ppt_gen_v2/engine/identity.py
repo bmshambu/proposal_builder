@@ -14,10 +14,7 @@ a merge de-duplicates nothing at all.
 import hashlib
 import re
 
-try:
-    import pptx_forensics as pf
-except ImportError:                                       # pragma: no cover
-    pf = None
+from . import forensics as pf                          # vendored: always present
 
 # PowerPoint stamps <a16:creationId id="{GUID}"/> on shapes (and p14:creationId
 # on slides). Read straight out of the raw XML rather than through a parsed
@@ -41,18 +38,15 @@ def slide_identity(xml_bytes, notes=None):
     if cids:
         return ("cid", frozenset(c.decode("ascii").lower() for c in cids)), "creationId"
 
-    if pf is not None:
-        try:
-            data = pf.parse_slide_xml(xml_bytes)
-            geom = data.get("geom_sig") or frozenset()
-            text = re.sub(r"\s+", " ", (data.get("text") or "")).strip().lower()
-            if geom or text:
-                return ("struct", geom, text), "structure+text"
-        except Exception as exc:
-            if notes is not None:
-                notes["parse_failed"] = "%s: %s" % (type(exc).__name__, exc)
-    elif notes is not None:
-        notes.setdefault("no_forensics", "pptx_forensics could not be imported")
+    try:
+        data = pf.parse_slide_xml(xml_bytes)
+        geom = data.get("geom_sig") or frozenset()
+        text = re.sub(r"\s+", " ", (data.get("text") or "")).strip().lower()
+        if geom or text:
+            return ("struct", geom, text), "structure+text"
+    except Exception as exc:
+        if notes is not None:
+            notes["parse_failed"] = "%s: %s" % (type(exc).__name__, exc)
 
     # last resort before hashing everything: geometry alone is token-invariant,
     # so a slide still matches across decks even though its text differs

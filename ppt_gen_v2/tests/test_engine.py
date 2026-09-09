@@ -1293,6 +1293,62 @@ class TestMasterMerge(EngineTestCase):
             self.assertEqual(len(order), len(set(order)),
                              "a block matched twice means a wrong match")
 
+    # -- does it match Templafy? -----------------------------------------
+    def test_our_decks_match_the_ones_templafy_produced(self):
+        """The acceptance test for the whole exercise: same slides, same order,
+        for the same answers."""
+        from engine import verify as verifymod
+        self.merge("--tokenise")
+        report = verifymod.verify(Template(os.path.join(self.roots, "merged")),
+                                  self.decks, self.pays)
+        self.assertEqual(report["compared"], len(self.cases))
+        self.assertEqual(report["exact"], report["compared"],
+                         [r["verdict"] for r in report["results"]])
+
+    def test_a_broken_rule_is_caught(self):
+        """A check that cannot fail proves nothing - the first version of this
+        module reported differences that were not there, and missed real ones."""
+        from engine import verify as verifymod
+        self.merge("--tokenise")
+        folder = os.path.join(self.roots, "merged")
+        tpl = Template(folder)
+        rules = json.load(open(tpl.rules_path, encoding="utf-8"))
+        victim = sorted(rules["blocks"])[0]
+        rules["blocks"][victim]["when"] = {"field": "AuditType",
+                                           "eq": "Never Matches Anything"}
+        with open(tpl.rules_path, "w", encoding="utf-8") as fh:
+            json.dump(rules, fh)
+
+        report = verifymod.verify(Template(folder), self.decks, self.pays)
+        self.assertLess(report["selection_ok"], report["compared"])
+        broken = [r for r in report["results"] if not r["selection_ok"]]
+        self.assertTrue(any(r["missing"] for r in broken))
+
+    def test_slides_are_matched_one_to_one(self):
+        """The bug that made the first version useless: keying a dictionary on
+        slide identity collapsed every slide sharing an identity onto one, so
+        it reported differences that did not exist."""
+        from engine import forensics, verify as verifymod
+        self.merge("--tokenise")
+        library = os.path.join(self.roots, "merged", "library.pptx")
+        deck = forensics.load_deck(os.path.join(self.decks, "00_baseline.pptx"))
+        lib = forensics.load_deck(library)
+        pairs, _only_a, _only_b = verifymod.align(deck["slides"], lib["slides"])
+        matched = [b["index"] for _a, b, _m, _s in pairs]
+        self.assertEqual(len(matched), len(set(matched)),
+                         "a library slide was matched to two deck slides")
+
+    def test_a_deck_matches_itself(self):
+        """The floor: if this fails nothing else about the comparison means
+        anything."""
+        from engine import verify as verifymod
+        deck = os.path.join(self.decks, "00_baseline.pptx")
+        result = verifymod.compare(deck, deck)
+        self.assertEqual(result["verdict"], "MATCH")
+        self.assertTrue(result["order_ok"])
+        self.assertEqual(result["missing"], [])
+        self.assertEqual(result["extra"], [])
+
     # -- tokenising -------------------------------------------------------
     def test_without_tokenising_the_library_is_one_client_snapshot(self):
         """Generated decks have their values already substituted. Saying so is

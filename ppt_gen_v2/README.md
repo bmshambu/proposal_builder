@@ -179,6 +179,23 @@ The two demo builds differ exactly as the rules say they should:
 | `scope` | `scope` | variant `scope_expansion` |
 | `{{ClientName}}` | Northwind Manufacturing plc | Globex International Holdings |
 
+## The acceptance test: does it match Templafy?
+
+```bash
+python build.py verify firm --decks ../data/decks --payloads ../data/payloads -v
+```
+
+Builds a deck per payload and compares it against the deck Templafy produced
+from the same answers — same slides, same order. Everything else checks a deck
+is *valid*; this checks it is *right*, against the only authority there is.
+
+Slides are aligned by v1's method (`diff_decks.py`): shape creationId overlap
+where Templafy preserved them, then layout and geometry, then text — whichever
+signal is strongest, greedily, one slide to one slide. Slides Templafy
+regenerates per client (fees, partner names) carry fresh creationIds and cannot
+be matched by identity; those are counted separately rather than reported as
+errors.
+
 ## When something is wrong: `check`
 
 ```bash

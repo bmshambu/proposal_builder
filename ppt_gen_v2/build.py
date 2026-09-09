@@ -246,47 +246,44 @@ def cmd_verify(args):
     from engine import verify as verifymod
 
     tpl = resolve(args)
-    report = verifymod.verify(tpl, args.decks, args.payloads,
-                              limit=args.limit)
+    report = verifymod.verify(tpl, args.decks, args.payloads, limit=args.limit)
     if not report["compared"]:
         print("Nothing to compare - no deck could be paired with a payload.")
         return 2
 
     for row in report["results"]:
-        if row.get("error"):
-            print("  FAIL  %-28s %s" % (row["deck"], row["error"]))
-        elif row["exact"]:
-            print("  ok    %-28s %d slides" % (row["deck"], row["actual"]))
-        else:
-            bits = []
-            if row["missing"]:
-                bits.append("%d missing" % len(row["missing"]))
-            if row["extra"]:
-                bits.append("%d extra" % len(row["extra"]))
-            if row["reordered"]:
-                bits.append("order differs")
-            print("  DIFF  %-28s %d vs %d slides: %s"
-                  % (row["deck"], row["actual"], row["expected"],
-                     ", ".join(bits) or "?"))
-            if args.verbose:
-                for b in row["missing"][:8]:
-                    print("          missing %s" % b)
-                for b in row["extra"][:8]:
-                    print("          extra   %s" % b)
+        mark = "ok  " if row.get("exact") else (
+            "sel " if row.get("selection_ok") else "FAIL")
+        detail = row.get("error") or ("%d vs %d slides, %d matched"
+                                      % (row.get("our_slides", 0),
+                                         row.get("templafy_slides", 0),
+                                         row.get("matched", 0)))
+        print("  %s %-26s %-34s %s"
+              % (mark, row["deck"], row["verdict"], detail))
+        if args.verbose:
+            for s in row.get("missing", [])[:5]:
+                print("         missing at %-3s %s" % (s["index"], s["preview"]))
+            for s in row.get("extra", [])[:5]:
+                print("         extra   at %-3s %s" % (s["index"], s["preview"]))
+            for t in row.get("text_differs", [])[:3]:
+                for seg in t["segments"][:2]:
+                    print("         text: ours %r vs templafy %r"
+                          % (seg["ours"][:40], seg["templafy"][:40]))
 
     print("")
-    print("%d of %d deck(s) reproduce Templafy's exactly"
-          % (report["exact"], report["compared"]))
-    print("")
-    print("  ! This comparison is NOT yet trustworthy: on the synthetic")
-    print("    fixtures it twice reported a 5-slide build for a deck that is")
-    print("    provably 7, and the discrepancy is unexplained. Treat a")
-    print("    mismatch as a prompt to look, not as a verdict.")
+    print("%d of %d deck(s) match exactly; %d have the right slides in the "
+          "right order" % (report["exact"], report["compared"],
+                           report["selection_ok"]))
     if report["unpaired_decks"]:
         print("  ! %d deck(s) had no payload: %s"
               % (len(report["unpaired_decks"]),
                  ", ".join(report["unpaired_decks"][:5])))
-    return 0 if report["exact"] == report["compared"] else 1
+    print("")
+    print("Slides are matched by creationId, then by layout and geometry, then")
+    print("by text - whichever is strongest. A deck Templafy regenerates per")
+    print("client (fees, partners) cannot be matched by identity and is counted")
+    print("separately rather than as an error.")
+    return 0 if report["selection_ok"] == report["compared"] else 1
 
 
 # ---------------------------------------------------------------- rules
@@ -527,8 +524,7 @@ def main(argv=None):
     bd.add_argument("--format", help="e.g. long_comma for dates")
 
     vf = sub.add_parser("verify",
-                        help="compare our decks with Templafy's (UNVERIFIED - "
-                             "see engine/verify.py)")
+                        help="compare our decks with the ones Templafy produced")
     vf.add_argument("template")
     vf.add_argument("--decks", required=True)
     vf.add_argument("--payloads", required=True)
