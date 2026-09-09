@@ -92,7 +92,12 @@ def keep_referenced_rels(part_xml, rels_xml, always_keep=("slideLayout",)):
     "found a problem with content"); keeping an *unreferenced* one whose part we
     did not copy dangles the target. Both are repair dialogs.
     """
-    referenced = set(re.findall(r'r:(?:id|embed|link)="([^"]+)"', part_xml))
+    # ANY attribute in the relationships namespace is a reference, not just the
+    # three common ones. SmartArt points at its four parts with r:dm, r:lo,
+    # r:qs and r:cs; media uses r:embed and r:link; charts use r:id. Listing
+    # them by name means the next one nobody thought of gets silently dropped,
+    # and the slide is left referencing a relationship that no longer exists.
+    referenced = set(re.findall(r'\br:[A-Za-z]+="([^"]+)"', part_xml))
     kept = []
     for tag in rel_tags(rels_xml):
         rid = rel_attr(tag, "Id")

@@ -869,6 +869,34 @@ class TestMasterMerge(EngineTestCase):
                                os.path.join(folder, name + ".pptx"))
         return folder
 
+    def test_smartart_relationships_are_not_dropped(self):
+        """SmartArt points at its four parts with r:dm / r:lo / r:qs / r:cs.
+        A keeper that only knows r:id, r:embed and r:link drops all four and
+        leaves the slide referencing relationships that no longer exist."""
+        rt = ("http://schemas.openxmlformats.org/officeDocument/2006/"
+              "relationships/")
+        rels = ooxmlmod.build_rels([
+            '<Relationship Id="rId1" Type="%sslideLayout" '
+            'Target="../slideLayouts/slideLayout1.xml"/>' % rt,
+            '<Relationship Id="rId4" Type="%sdiagramData" '
+            'Target="../diagrams/data1.xml"/>' % rt,
+            '<Relationship Id="rId5" Type="%sdiagramLayout" '
+            'Target="../diagrams/layout1.xml"/>' % rt,
+            '<Relationship Id="rId6" Type="%sdiagramQuickStyle" '
+            'Target="../diagrams/quickStyle1.xml"/>' % rt,
+            '<Relationship Id="rId7" Type="%sdiagramColors" '
+            'Target="../diagrams/colors1.xml"/>' % rt,
+            '<Relationship Id="rId9" Type="%snotesSlide" '
+            'Target="../notesSlides/notesSlide1.xml"/>' % rt])
+        slide = ('<p:sld><p:cSld><p:spTree><p:graphicFrame><a:graphic>'
+                 '<a:graphicData><dgm:relIds r:dm="rId4" r:lo="rId5" '
+                 'r:qs="rId6" r:cs="rId7"/></a:graphicData></a:graphic>'
+                 '</p:graphicFrame></p:spTree></p:cSld></p:sld>')
+        kept = ooxmlmod.keep_referenced_rels(slide, rels)
+        for rid in ("rId4", "rId5", "rId6", "rId7"):
+            self.assertIn(rid, kept, "SmartArt part %s was dropped" % rid)
+        self.assertNotIn("rId9", kept, "unreferenced notes should still go")
+
     def test_a_templafy_shaped_merge_validates(self):
         """The real 70-deck merge produced a library PowerPoint would not open:
         binary parts renamed to .xml, and eight GUID relationship ids in
