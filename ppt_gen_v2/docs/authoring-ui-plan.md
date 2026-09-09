@@ -231,15 +231,20 @@ so the author starts from a draft. Deliberately last: the UI must be usable by
 an author who has no generated decks at all, or we have rebuilt the dependency
 we are trying to remove.
 
+## Decided
+
+**A slide never appears twice in one deck** (author, 2026-09-10). So the deck
+order is a set, not a bag: a block id occurs at most once in the ordered list.
+That is what the engine already assumes, and it is what keeps the UI simple -
+"in the deck or not" is one yes/no per slide, the pool and the deck are two
+halves of one list, and a drag is a move rather than a copy. Had the answer gone
+the other way, every row would have needed its own instance id.
+
 ## Open questions for the author
 
-1. **Can a slide appear twice in one deck?** The block model assumes one
-   position per block. If a divider repeats, the ordered list needs to allow a
-   block more than once, which is a small change made cheaply now and painfully
-   later.
-2. **Do conditions ever need more than one field?** The engine has
+1. **Do conditions ever need more than one field?** The engine has
    `all`/`any`/`not` already; the question is whether the *UI* needs to expose
    them in M3 or can wait.
-3. **Who supplies the field catalogue in production?** Uploading a sample
+2. **Who supplies the field catalogue in production?** Uploading a sample
    payload works for us because we have 70. A real deployment probably has a
    form definition somewhere that would be a better source.

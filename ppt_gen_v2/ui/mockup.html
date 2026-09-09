@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Proposal builder - author console (mockup)</title>
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#ffffff; --ink:#16191d; --muted:#6b7280; --line:#e3e6ea;
+  --accent:#1f5fbf; --accent-soft:#e8f0fc; --warn:#b45309; --warn-soft:#fef3e2;
+  --bad:#b91c1c; --bad-soft:#fdeaea; --ok:#15803d; --ok-soft:#e7f5ec;
+  --off:#9aa1ab; --radius:8px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+     font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}
+h1,h2,h3{margin:0;font-weight:600}
+button{font:inherit;cursor:pointer}
+select,input[type=text]{font:inherit;padding:4px 6px;border:1px solid var(--line);
+  border-radius:6px;background:#fff;color:var(--ink)}
+
+/* ---------------------------------------------------------------- chrome */
+header{background:var(--panel);border-bottom:1px solid var(--line);
+  padding:10px 18px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.brand{font-weight:600}
+.brand small{display:block;font-weight:400;color:var(--muted);font-size:12px}
+.tabs{display:flex;gap:2px;margin-left:8px}
+.tabs button{background:none;border:1px solid transparent;padding:6px 14px;
+  border-radius:6px;color:var(--muted)}
+.tabs button.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.spacer{flex:1}
+.btn{background:#fff;border:1px solid var(--line);border-radius:6px;padding:6px 12px}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{color:#fff;opacity:.9}
+.mock{background:var(--warn-soft);color:var(--warn);border:1px solid #f0d9b5;
+  padding:3px 8px;border-radius:20px;font-size:11px;font-weight:600}
+
+main{padding:16px 18px 90px}
+.screen{display:none}
+.screen.on{display:block}
+
+/* ---------------------------------------------------------------- panels */
+.cols{display:grid;grid-template-columns:300px 1fr;gap:16px;align-items:start}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius)}
+.panel>h2{padding:11px 14px;border-bottom:1px solid var(--line);font-size:13px;
+  display:flex;align-items:center;gap:8px}
+.panel>h2 .count{color:var(--muted);font-weight:400}
+.panel>h2 .hint{margin-left:auto;font-weight:400;color:var(--muted);font-size:12px}
+.pad{padding:12px 14px}
+
+/* ---------------------------------------------------------------- thumbs */
+.thumb{width:100%;display:block;border:1px solid var(--line);border-radius:4px;
+  background:#fff}
+.thumb.sm{width:104px;min-width:104px}
+.thumb.xs{width:74px;min-width:74px}
+
+/* ---------------------------------------------------------------- pool */
+.pool{max-height:66vh;overflow:auto;padding:10px 12px;display:flex;
+  flex-direction:column;gap:8px}
+.pool-item{border:1px solid var(--line);border-radius:6px;padding:8px;
+  display:flex;gap:9px;align-items:center;cursor:grab;background:#fff}
+.pool-item:hover{border-color:var(--accent);background:var(--accent-soft)}
+.pool-item .meta{min-width:0}
+.pool-item .id{font-family:ui-monospace,Consolas,monospace;font-size:11px;
+  color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pool-item .t{font-size:12.5px;font-weight:500}
+.add{margin-left:auto;border:1px solid var(--line);background:#fff;border-radius:5px;
+  width:24px;height:24px;line-height:1;color:var(--accent)}
+
+/* ---------------------------------------------------------------- deck */
+.deck{padding:8px 10px;min-height:120px}
+.row{display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:6px;
+  border:1px solid transparent}
+.row:hover{background:#fafbfc;border-color:var(--line)}
+.row.drop-before{box-shadow:inset 0 2px 0 var(--accent)}
+.row.excluded{opacity:.42}
+.row.excluded .thumb{filter:grayscale(1)}
+.grip{color:#c3c8ce;cursor:grab;user-select:none;letter-spacing:-1px}
+.num{width:22px;text-align:right;color:var(--muted);font-size:12px;
+  font-variant-numeric:tabular-nums}
+.namecell{min-width:0;flex:1}
+.namecell .t{font-weight:500}
+.namecell .id{font-family:ui-monospace,Consolas,monospace;font-size:11px;color:var(--muted)}
+.chip{border:1px solid var(--line);background:#fff;border-radius:20px;padding:4px 11px;
+  font-size:12px;color:var(--muted);max-width:340px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.chip.cond{background:var(--accent-soft);border-color:#c9dcf7;color:var(--accent);font-weight:500}
+.chip:hover{border-color:var(--accent)}
+.del{border:none;background:none;color:#c3c8ce;font-size:16px;line-height:1}
+.del:hover{color:var(--bad)}
+.status{font-size:11px;width:64px;text-align:right;color:var(--off)}
+
+/* ---------------------------------------------------------------- cond editor */
+.editor{margin:2px 8px 10px 62px;background:#fbfcfd;border:1px solid var(--line);
+  border-left:3px solid var(--accent);border-radius:6px;padding:11px 13px}
+.editor .line{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.editor .note{color:var(--muted);font-size:12px;margin-top:8px}
+.editor .acts{margin-top:10px;display:flex;gap:8px}
+
+/* ---------------------------------------------------------------- testbar */
+.testbar{position:fixed;left:0;right:0;bottom:0;background:var(--panel);
+  border-top:1px solid var(--line);padding:9px 18px;display:flex;gap:14px;
+  align-items:center;flex-wrap:wrap;box-shadow:0 -1px 6px rgba(0,0,0,.04)}
+.testbar .lab{font-size:12px;font-weight:600;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.04em}
+.testbar label{font-size:12.5px;display:flex;align-items:center;gap:5px}
+.tally{margin-left:auto;font-size:13px}
+.tally b{font-size:16px}
+
+/* ---------------------------------------------------------------- library */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));
+  gap:13px;padding:14px}
+.card{border:1px solid var(--line);border-radius:6px;padding:9px;background:#fff}
+.card .t{font-size:12.5px;font-weight:500;margin-top:7px}
+.card .id{font-family:ui-monospace,Consolas,monospace;font-size:11px;color:var(--muted)}
+.tags{margin-top:6px;display:flex;flex-wrap:wrap;gap:4px}
+.tag{font-size:10.5px;padding:1px 6px;border-radius:20px;background:#f0f2f5;color:var(--muted)}
+.tag.ph{background:var(--accent-soft);color:var(--accent);
+  font-family:ui-monospace,Consolas,monospace}
+.tag.w{background:var(--warn-soft);color:var(--warn)}
+.tag.b{background:var(--bad-soft);color:var(--bad)}
+.notice{margin:0 14px 14px;padding:10px 13px;border-radius:6px;font-size:13px}
+.notice.warn{background:var(--warn-soft);color:var(--warn);border:1px solid #f0d9b5}
+.notice.bad{background:var(--bad-soft);color:var(--bad);border:1px solid #f3c9c9}
+.notice.ok{background:var(--ok-soft);color:var(--ok);border:1px solid #cfe8d8}
+.notice b{display:block;margin-bottom:2px}
+
+/* ---------------------------------------------------------------- mapping */
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:9px 14px;border-bottom:1px solid var(--line);
+  vertical-align:middle}
+th{font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);
+  font-weight:600}
+td.ph{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;white-space:nowrap}
+td.used{color:var(--muted);font-size:12.5px;white-space:nowrap}
+.pill{font-size:11px;padding:2px 8px;border-radius:20px}
+.pill.bad{background:var(--bad-soft);color:var(--bad)}
+.pill.warn{background:var(--warn-soft);color:var(--warn)}
+.pill.ok{background:var(--ok-soft);color:var(--ok)}
+.preview{color:var(--muted);font-size:12.5px;font-style:italic}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">Proposal builder
+    <small>template: <b>firm</b> &middot; library.pptx &middot; 27 slides</small></div>
+  <nav class="tabs">
+    <button data-tab="library">Library</button>
+    <button data-tab="rules" class="on">Rules</button>
+    <button data-tab="mapping">Mapping</button>
+  </nav>
+  <span class="spacer"></span>
+  <span class="mock">MOCKUP - fake data, nothing saved</span>
+  <button class="btn">Build test deck</button>
+  <button class="btn">Check against Templafy</button>
+  <button class="btn primary">Save rules</button>
+</header>
+
+<main>
+
+<!-- ============================================================ LIBRARY -->
+<section class="screen" id="screen-library">
+  <div class="panel">
+    <h2>Every slide in the library <span class="count" id="lib-count"></span>
+      <span class="hint">thumbnails rendered in-process by engine/svg.py - no PowerPoint, no LibreOffice</span></h2>
+    <div class="notice bad"><b>2 slides still contain a client name as plain text</b>
+      Tokenising deliberately skipped these because the generated decks did not prove
+      the value was dynamic. Bind them or edit the slide, or every deck ships with
+      the wrong client on it.</div>
+    <div class="notice warn"><b>3 slides have no stable id</b>
+      They are named by their title, so retitling the slide in PowerPoint renames the
+      block and silently breaks any rule that points at it. Add a
+      <code>{{block:id}}</code> marker, or rename here to pin it.</div>
+    <div class="grid" id="lib-grid"></div>
+  </div>
+</section>
+
+<!-- ============================================================== RULES -->
+<section class="screen on" id="screen-rules">
+  <div class="cols">
+
+    <div class="panel">
+      <h2>Not in the deck <span class="count" id="pool-count"></span></h2>
+      <div class="pad" style="padding-bottom:0">
+        <input type="text" id="pool-search" placeholder="Filter slides..." style="width:100%">
+      </div>
+      <div class="pool" id="pool"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Deck order <span class="count" id="deck-count"></span>
+        <span class="hint">drag to reorder &middot; click a condition to edit it</span></h2>
+      <div class="deck" id="deck"></div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============================================================ MAPPING -->
+<section class="screen" id="screen-mapping">
+  <div class="panel">
+    <h2>Placeholders in the library <span class="count" id="map-count"></span>
+      <span class="hint">the field list comes from the sample payload - nothing is typed by hand</span></h2>
+    <div class="notice ok"><b>Field catalogue loaded from 70 sample payloads</b>
+      18 fields, each with the values actually seen. The same catalogue fills the
+      condition dropdowns on the Rules screen.</div>
+    <table>
+      <thead><tr><th>Placeholder</th><th>Used on</th><th>Comes from</th>
+        <th>Renders as</th><th></th></tr></thead>
+      <tbody id="map-body"></tbody>
+    </table>
+  </div>
+</section>
+
+</main>
+
+<!-- ============================================================ TEST BAR -->
+<div class="testbar" id="testbar">
+  <span class="lab">Test drive</span>
+  <label>AuditType
+    <select data-ans="AuditType">
+      <option>Recurring</option><option>Expansion of Services</option></select></label>
+  <label>City
+    <select data-ans="City">
+      <option>Atlanta</option><option>Chicago</option><option>Seattle</option></select></label>
+  <label><input type="checkbox" data-ans="Transition_lab"> Transition_lab</label>
+  <label><input type="checkbox" data-ans="Peer_review"> Peer_review</label>
+  <label><input type="checkbox" data-ans="Internal_audit"> Internal_audit</label>
+  <label><input type="checkbox" data-ans="Quality" checked> Quality</label>
+  <span class="tally"><b id="tally">0</b> slides in this deck
+    <span style="color:var(--muted)" id="tally-off"></span></span>
+</div>
+
+<script>
+/* ------------------------------------------------------------------ data
+   Stand-in for what the API will return. Slide names are synthetic - the real
+   firm template is confidential and is never committed. */
+const BLOCKS = [
+  {id:"cover",             t:"Cover",                          ph:["ClientName","DueDate"], src:"marker"},
+  {id:"agenda",            t:"Agenda",                         ph:[],                       src:"marker"},
+  {id:"about_us",          t:"About our firm",                 ph:["FirmName"],             src:"marker"},
+  {id:"our_team",          t:"Your engagement team",           ph:["LeadPartner"],          src:"marker"},
+  {id:"team_bios",         t:"Team biographies",               ph:["LeadPartner"],          src:"title"},
+  {id:"approach",          t:"Our audit approach",             ph:[],                       src:"marker"},
+  {id:"approach_detail",   t:"Approach in detail",             ph:[],                       src:"marker"},
+  {id:"transition_plan",   t:"Transition plan",                ph:["ClientName"],           src:"marker"},
+  {id:"transition_lab",    t:"Transition lab",                 ph:[],                       src:"marker"},
+  {id:"scope",             t:"Scope of services",              ph:["ClientName"],           src:"marker"},
+  {id:"scope_expansion",   t:"Scope - expansion of services",  ph:["ClientName"],           src:"marker"},
+  {id:"expansion_detail",  t:"Expansion detail",               ph:[],                       src:"title"},
+  {id:"quality",           t:"Audit quality",                  ph:[],                       src:"marker"},
+  {id:"peer_review",       t:"Peer review",                    ph:[],                       src:"marker"},
+  {id:"internal_audit",    t:"Internal audit alignment",       ph:[],                       src:"marker"},
+  {id:"intl_statutory",    t:"International statutory",        ph:[],                       src:"marker"},
+  {id:"sector_experience", t:"Sector experience",              ph:["Sector"],               src:"marker"},
+  {id:"subsector_creds",   t:"Sub-sector credentials",         ph:["SubSector"],            src:"marker"},
+  {id:"city_office",       t:"Your local office",              ph:["City"],                 src:"marker", literal:true},
+  {id:"inclusive_culture", t:"Inclusive culture",              ph:[],                       src:"marker"},
+  {id:"talent",            t:"Cultivating talent",             ph:[],                       src:"marker"},
+  {id:"symposium",         t:"Annual symposium",               ph:[],                       src:"title"},
+  {id:"fees",              t:"Fees",                           ph:["FeePlanning","FeeInterim","FeeYearEnd","FeeTotal"], src:"marker"},
+  {id:"fees_expansion",    t:"Fees - expansion",               ph:["FeeTotal"],             src:"marker"},
+  {id:"contacts",          t:"Contacts",                       ph:["LeadPartner","City"],   src:"marker", literal:true},
+  {id:"appendix_method",   t:"Appendix A - methodology",       ph:[],                       src:"marker"},
+  {id:"appendix_refs",     t:"Appendix B - references",        ph:[],                       src:"marker"},
+];
+const BY_ID = Object.fromEntries(BLOCKS.map(b => [b.id, b]));
+
+/* the field catalogue, as derived from sample payloads: dot-path -> values seen */
+const FIELDS = {
+  FullClientName:  {kind:"text",  eg:"Example Corporation"},
+  ShortClientName: {kind:"text",  eg:"Example"},
+  DueDate:         {kind:"date",  eg:"20261130"},
+  City:            {kind:"choice", values:["Atlanta","Austin","Boston","Chicago","Denver","Seattle"]},
+  Sector:          {kind:"choice", values:["Healthcare","Technology","Insurance","Industrial Manufacturing"]},
+  SubSector:       {kind:"choice", values:["Healthtech","Semiconductors","Hardware","Automotive"]},
+  AuditType:       {kind:"choice", values:["Recurring","Expansion of Services"]},
+  Transition_lab:  {kind:"bool"},
+  Peer_review:     {kind:"bool"},
+  Internal_audit:  {kind:"bool"},
+  Intl_statutory:  {kind:"bool"},
+  Quality:         {kind:"bool"},
+  Shared_history:  {kind:"bool"},
+  Inclusive_culture:{kind:"bool"},
+};
+const OPERATORS = [["eq","is"],["ne","is not"],["in","is one of"],
+                   ["not_in","is not one of"],["exists","is answered"]];
+
+/* the deck, as rules.json would hold it: an ordered list, a condition per row */
+let DECK = [
+  {id:"cover"},
+  {id:"agenda"},
+  {id:"about_us"},
+  {id:"our_team"},
+  {id:"approach"},
+  {id:"transition_plan"},
+  {id:"transition_lab",    when:{field:"Transition_lab", eq:"true"}},
+  {id:"scope"},
+  {id:"scope_expansion",   when:{field:"AuditType", eq:"Expansion of Services"}},
+  {id:"expansion_detail",  when:{field:"AuditType", eq:"Expansion of Services"}},
+  {id:"quality",           when:{field:"Quality", eq:"true"}},
+  {id:"peer_review",       when:{field:"Peer_review", eq:"true"}},
+  {id:"internal_audit",    when:{field:"Internal_audit", eq:"true"}},
+  {id:"sector_experience"},
+  {id:"city_office",       when:{field:"City", exists:true}},
+  {id:"fees"},
+  {id:"fees_expansion",    when:{field:"AuditType", eq:"Expansion of Services"}},
+  {id:"contacts"},
+];
+
+let BINDINGS = {
+  ClientName:  {from:"field",   field:"FullClientName"},
+  DueDate:     {from:"field",   field:"DueDate", format:"long_comma"},
+  City:        {from:"field",   field:"City"},
+  Sector:      {from:"field",   field:"Sector"},
+  SubSector:   null,
+  FirmName:    {from:"literal", value:"Demo LLP"},
+  LeadPartner: {from:"data",    source:"profile", key:"lead_partner"},
+  FeePlanning: {from:"data",    source:"finance", key:"planning"},
+  FeeInterim:  {from:"data",    source:"finance", key:"interim"},
+  FeeYearEnd:  {from:"data",    source:"finance", key:"year_end"},
+  FeeTotal:    {from:"data",    source:"finance", key:"total"},
+};
+const DATE_FORMATS = {
+  long_comma:"November 30, 2026", day_month:"30 November 2026",
+  abbr_comma:"Nov 30, 2026", day_abbr:"30 Nov 2026",
+  us_slash:"11/30/2026", eu_slash:"30/11/2026", iso:"2026-11-30", raw:"20261130",
+};
+
+let ANSWERS = {AuditType:"Recurring", City:"Atlanta", Quality:true};
+let EDITING = null;   // block id whose condition editor is open
+
+/* ------------------------------------------------------------- thumbnails
+   A drawn stand-in. The real screen shows engine/svg.py output, which is why
+   this shape - 16:9, title band, body lines - is what it renders to. */
+function thumb(b, cls){
+  const lines = [0.92, 0.74, 0.86, 0.55].map((w,i) =>
+    `<rect x="8" y="${34+i*9}" width="${Math.round(128*w)}" height="4" rx="2" fill="#e6e9ee"/>`).join("");
+  const title = b.t.length > 20 ? b.t.slice(0,19) + "…" : b.t;
+  return `<svg class="thumb ${cls||''}" viewBox="0 0 144 81" role="img" aria-label="${b.t}">
+    <rect width="144" height="81" fill="#fff"/>
+    <rect width="144" height="22" fill="#1f5fbf" opacity=".08"/>
+    <text x="8" y="15" font-size="8.5" fill="#1f5fbf" font-family="sans-serif">${title}</text>
+    ${lines}
+    ${b.ph.length ? '<rect x="8" y="70" width="46" height="5" rx="2.5" fill="#c9dcf7"/>' : ''}
+  </svg>`;
+}
+
+/* ------------------------------------------------------- condition -> text */
+function condText(when){
+  if(!when) return "always";
+  const f = when.field;
+  if("exists" in when) return `${f} is answered`;
+  if("eq" in when)     return `${f} is "${when.eq}"`;
+  if("ne" in when)     return `${f} is not "${when.ne}"`;
+  if("in" in when)     return `${f} is one of ${when.in.join(", ")}`;
+  if("not_in" in when) return `${f} is not one of ${when.not_in.join(", ")}`;
+  return JSON.stringify(when);
+}
+/* the same evaluation rules.py uses, cut down to one clause */
+function holds(when){
+  if(!when) return true;
+  const v = ANSWERS[when.field];
+  const s = (x) => String(x === undefined || x === null ? "" : x).trim().toLowerCase();
+  if("exists" in when) return (s(v) !== "") === !!when.exists;
+  if("eq" in when)     return s(v) === s(when.eq);
+  if("ne" in when)     return s(v) !== s(when.ne);
+  if("in" in when)     return when.in.some(x => s(x) === s(v));
+  if("not_in" in when) return !when.not_in.some(x => s(x) === s(v));
+  return true;
+}
+
+/* ------------------------------------------------------------------- pool */
+function renderPool(){
+  const q = (document.getElementById("pool-search").value || "").toLowerCase();
+  const inDeck = new Set(DECK.map(r => r.id));
+  const rest = BLOCKS.filter(b => !inDeck.has(b.id))
+    .filter(b => !q || b.id.includes(q) || b.t.toLowerCase().includes(q));
+  document.getElementById("pool-count").textContent = `(${rest.length})`;
+  document.getElementById("pool").innerHTML = rest.map(b => `
+    <div class="pool-item" draggable="true" data-from="pool" data-id="${b.id}">
+      ${thumb(b,"xs")}
+      <div class="meta"><div class="t">${b.t}</div><div class="id">${b.id}</div></div>
+      <button class="add" title="Add to the end of the deck" data-add="${b.id}">+</button>
+    </div>`).join("") ||
+    `<p style="color:var(--muted);font-size:13px">Every slide is in the deck.</p>`;
+}
+
+/* ------------------------------------------------------------------- deck */
+function renderDeck(){
+  const deck = document.getElementById("deck");
+  let n = 0, off = 0;
+  deck.innerHTML = DECK.map((row) => {
+    const b = BY_ID[row.id];
+    const on = holds(row.when);
+    if(on) n++; else off++;
+    const html = `
+      <div class="row ${on?'':'excluded'}" draggable="true" data-from="deck" data-id="${row.id}">
+        <span class="grip">&#8942;&#8942;</span>
+        <span class="num">${on ? n : "–"}</span>
+        ${thumb(b,"sm")}
+        <div class="namecell"><div class="t">${b.t}</div><div class="id">${b.id}</div></div>
+        <button class="chip ${row.when?'cond':''}" data-edit="${row.id}"
+          title="Click to change when this slide is included">${condText(row.when)}</button>
+        <span class="status">${on ? "" : "not in deck"}</span>
+        <button class="del" data-del="${row.id}" title="Remove from the deck">&times;</button>
+      </div>`;
+    return html + (EDITING === row.id ? editorHTML(row) : "");
+  }).join("");
+  document.getElementById("deck-count").textContent = `(${DECK.length} slides, ${n} for these answers)`;
+  document.getElementById("tally").textContent = n;
+  document.getElementById("tally-off").textContent = off ? ` · ${off} excluded` : "";
+}
+
+/* --------------------------------------------------------- condition editor */
+function editorHTML(row){
+  const when = row.when || {};
+  const op = "exists" in when ? "exists" : ["eq","ne","in","not_in"].find(k => k in when) || "eq";
+  const field = when.field || "";
+  const spec = FIELDS[field];
+  let valueCtl = "";
+  if(op === "exists"){
+    valueCtl = `<span style="color:var(--muted);font-size:12.5px">(any answer counts)</span>`;
+  } else if(spec && spec.kind === "bool"){
+    valueCtl = `<select data-v><option value="true"${when[op]==="true"?" selected":""}>true</option>
+      <option value="false"${when[op]==="false"?" selected":""}>false</option></select>`;
+  } else if(spec && spec.values){
+    valueCtl = `<select data-v>${spec.values.map(v =>
+      `<option${when[op]===v?" selected":""}>${v}</option>`).join("")}</select>`;
+  } else {
+    valueCtl = `<input type="text" data-v value="${when[op]||""}" placeholder="value">`;
+  }
+  return `<div class="editor">
+    <div class="line">
+      <b style="font-size:12.5px">Include this slide when</b>
+      <select data-f>
+        <option value=""${field?"":" selected"}>always — no condition</option>
+        ${Object.keys(FIELDS).map(f =>
+          `<option${f===field?" selected":""}>${f}</option>`).join("")}
+      </select>
+      ${field ? `<select data-o>${OPERATORS.map(([k,lab]) =>
+        `<option value="${k}"${k===op?" selected":""}>${lab}</option>`).join("")}</select>` : ""}
+      ${field ? valueCtl : ""}
+    </div>
+    <div class="note">Fields and values come from the sample payloads, so a rule
+      cannot quietly fail because a field name was mistyped.</div>
+    <div class="acts">
+      <button class="btn primary" data-apply="${row.id}">Apply</button>
+      <button class="btn" data-cancel="1">Cancel</button>
+    </div>
+  </div>`;
+}
+
+/* ---------------------------------------------------------------- mapping */
+function renderMapping(){
+  const used = {};
+  BLOCKS.forEach(b => b.ph.forEach(p => used[p] = (used[p]||0)+1));
+  const rows = Object.keys(used).sort().map(p => {
+    const bind = BINDINGS[p];
+    let from, renders, state;
+    if(!bind){
+      from = `<select><option>choose…</option><option>field</option>
+        <option>data</option><option>literal</option></select>`;
+      renders = `<span class="preview">nothing — the deck will show {{${p}}}</span>`;
+      state = `<span class="pill bad">unbound</span>`;
+    } else if(bind.from === "field"){
+      const spec = FIELDS[bind.field] || {};
+      const fmt = bind.format
+        ? `<select>${Object.entries(DATE_FORMATS).map(([k,v]) =>
+            `<option${k===bind.format?" selected":""}>${v}</option>`).join("")}</select>`
+        : "";
+      from = `<select><option selected>field</option><option>data</option>
+        <option>literal</option></select>
+        <select>${Object.keys(FIELDS).map(f =>
+          `<option${f===bind.field?" selected":""}>${f}</option>`).join("")}</select> ${fmt}`;
+      renders = `<span class="preview">${bind.format ? DATE_FORMATS[bind.format]
+                  : (spec.eg || (spec.values||["—"])[0])}</span>`;
+      state = `<span class="pill ok">bound</span>`;
+    } else if(bind.from === "data"){
+      from = `<select><option>field</option><option selected>data</option>
+        <option>literal</option></select>
+        <code style="font-size:12px">${bind.source} / ${bind.key}</code>`;
+      renders = `<span class="preview">needs an external system</span>`;
+      state = `<span class="pill warn">not wired</span>`;
+    } else {
+      from = `<select><option>field</option><option>data</option>
+        <option selected>literal</option></select>
+        <input type="text" value="${bind.value}" size="14">`;
+      renders = `<span class="preview">${bind.value}</span>`;
+      state = `<span class="pill ok">bound</span>`;
+    }
+    return `<tr><td class="ph">{{${p}}}</td><td class="used">${used[p]} slide${used[p]>1?"s":""}</td>
+      <td>${from}</td><td>${renders}</td><td>${state}</td></tr>`;
+  }).join("");
+  document.getElementById("map-body").innerHTML = rows;
+  document.getElementById("map-count").textContent = `(${Object.keys(used).length})`;
+}
+
+/* ---------------------------------------------------------------- library */
+function renderLibrary(){
+  document.getElementById("lib-count").textContent = `(${BLOCKS.length})`;
+  document.getElementById("lib-grid").innerHTML = BLOCKS.map(b => `
+    <div class="card">${thumb(b)}
+      <div class="t">${b.t}</div><div class="id">${b.id}</div>
+      <div class="tags">
+        ${b.src === "title" ? '<span class="tag w">named by title</span>' : ''}
+        ${b.literal ? '<span class="tag b">literal client name</span>' : ''}
+        ${b.ph.map(p => `<span class="tag ph">${p}</span>`).join("")}
+        ${!b.ph.length && b.src!=="title" && !b.literal ? '<span class="tag">no placeholders</span>' : ''}
+      </div>
+    </div>`).join("");
+}
+
+/* ------------------------------------------------------------------ events */
+document.querySelectorAll(".tabs button").forEach(btn => btn.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b === btn));
+  const tab = btn.dataset.tab;
+  document.querySelectorAll(".screen").forEach(s =>
+    s.classList.toggle("on", s.id === "screen-" + tab));
+  document.getElementById("testbar").style.display = tab === "rules" ? "" : "none";
+});
+
+document.getElementById("pool-search").oninput = renderPool;
+
+document.addEventListener("click", (e) => {
+  const t = e.target;
+  if(t.dataset.add){ DECK.push({id:t.dataset.add}); redraw(); }
+  else if(t.dataset.del){ DECK = DECK.filter(r => r.id !== t.dataset.del); redraw(); }
+  else if(t.dataset.edit){ EDITING = EDITING === t.dataset.edit ? null : t.dataset.edit; renderDeck(); }
+  else if(t.dataset.cancel){ EDITING = null; renderDeck(); }
+  else if(t.dataset.apply){
+    const ed = t.closest(".editor");
+    const field = ed.querySelector("[data-f]").value;
+    const row = DECK.find(r => r.id === t.dataset.apply);
+    if(!field){ delete row.when; }
+    else {
+      const op = ed.querySelector("[data-o]").value;
+      const vEl = ed.querySelector("[data-v]");
+      row.when = op === "exists" ? {field, exists:true}
+               : {field, [op]: op==="in"||op==="not_in"
+                    ? vEl.value.split(",").map(s=>s.trim()) : vEl.value};
+    }
+    EDITING = null; redraw();
+  }
+});
+/* re-open the editor when the field changes, so the value control follows it */
+document.addEventListener("change", (e) => {
+  if(e.target.matches("[data-f],[data-o]")){
+    const ed = e.target.closest(".editor");
+    const row = DECK.find(r => r.id === EDITING);
+    const field = ed.querySelector("[data-f]").value;
+    const op = (ed.querySelector("[data-o]")||{}).value || "eq";
+    row.when = field ? (op === "exists" ? {field, exists:true} : {field, [op]:""}) : undefined;
+    if(!field) delete row.when;
+    renderDeck();
+  }
+  if(e.target.dataset.ans !== undefined){
+    const el = e.target;
+    ANSWERS[el.dataset.ans] = el.type === "checkbox" ? el.checked : el.value;
+    renderDeck();
+  }
+});
+
+/* ------------------------------------------------------------ drag & drop */
+let DRAG = null;
+document.addEventListener("dragstart", (e) => {
+  const item = e.target.closest("[data-id][draggable]");
+  if(!item) return;
+  DRAG = {id:item.dataset.id, from:item.dataset.from};
+  e.dataTransfer.effectAllowed = "move";
+});
+document.addEventListener("dragover", (e) => {
+  const row = e.target.closest(".row");
+  if(!DRAG || !row) return;
+  e.preventDefault();
+  document.querySelectorAll(".row.drop-before").forEach(r => r.classList.remove("drop-before"));
+  row.classList.add("drop-before");
+});
+document.addEventListener("drop", (e) => {
+  const row = e.target.closest(".row");
+  const deck = e.target.closest("#deck");
+  if(!DRAG || !deck) return;
+  e.preventDefault();
+  const entry = DECK.find(r => r.id === DRAG.id) || {id:DRAG.id};
+  DECK = DECK.filter(r => r.id !== DRAG.id);
+  const at = row ? DECK.findIndex(r => r.id === row.dataset.id) : DECK.length;
+  DECK.splice(at < 0 ? DECK.length : at, 0, entry);
+  DRAG = null; redraw();
+});
+document.addEventListener("dragend", () => {
+  document.querySelectorAll(".row.drop-before").forEach(r => r.classList.remove("drop-before"));
+  DRAG = null;
+});
+
+function redraw(){ renderPool(); renderDeck(); }
+renderLibrary(); renderMapping(); redraw();
+</script>
+</body>
+</html>
