@@ -7,6 +7,7 @@
     python build.py rename  office slide_7 executive_summary
     python build.py preview office --out out/sheet.html    # slide images (built in)
     python build.py check   office                        # write report.md
+    python build.py reconcile office                      # re-key blocks.json
     python build.py make    office --answers a.json --out out/deck.pptx
 
 Adding a template is a file operation — drop a folder under templates/, or run
@@ -163,6 +164,39 @@ def cmd_rename(args):
     return 0
 
 
+# ---------------------------------------------------------------- reconcile
+def cmd_reconcile(args):
+    """Re-key blocks.json after the library deck has been rewritten.
+
+    The sidecar maps slide part names to block ids, so anything that renumbers
+    parts - a designer reordering slides, or PowerPoint rewriting the package
+    during a repair - leaves the ids naming the wrong slides. Nothing errors;
+    the rules just quietly pull the wrong content.
+    """
+    tpl = resolve(args)
+    report = tpl.reconcile_blocks()
+    if not report["changed"] and not report["unmatched"] and not report["vanished"]:
+        print("blocks.json already matches the library - nothing to do")
+        return 0
+    for bid, was, now in report["moved"]:
+        print("  moved     %-30s %s -> %s" % (bid, was, now))
+    for bid, was in report["unmatched"]:
+        print("  ! LOST    %-30s was %s - no slide with its recorded title"
+              % (bid, was))
+    for part in report["vanished"]:
+        print("  ! UNNAMED %s - a slide no block id points at" % part)
+    if report["changed"]:
+        print("")
+        print("Rewrote %s" % tpl.blocks_path)
+    if report["unmatched"] or report["vanished"]:
+        print("")
+        print("Check these by eye before building - a block id on the wrong")
+        print("slide produces a deck that looks right and is not:")
+        print("  python build.py preview %s" % tpl.name)
+        return 1
+    return 0
+
+
 # ---------------------------------------------------------------- check
 def cmd_check(args):
     """Inspect a template and write report.md.
@@ -301,6 +335,10 @@ def main(argv=None):
     pv.add_argument("--out", help="output .html")
     pv.add_argument("--blocks", nargs="*", help="only these blocks")
 
+    rc = sub.add_parser("reconcile",
+                        help="re-key blocks.json after the library was rewritten")
+    rc.add_argument("template")
+
     ck = sub.add_parser("check", help="write report.md describing any problems")
     ck.add_argument("template")
     ck.add_argument("--out", help="output .md (default: <template>/report.md)")
@@ -327,7 +365,8 @@ def main(argv=None):
 
     handler = {"list": cmd_list, "import": cmd_import, "inspect": cmd_inspect,
                "rename": cmd_rename, "make": cmd_make,
-               "preview": cmd_preview, "check": cmd_check}[args.cmd]
+               "preview": cmd_preview, "check": cmd_check,
+               "reconcile": cmd_reconcile}[args.cmd]
     try:
         return handler(args)
     except (AssemblyError, RulesError, LibraryError, TemplateError) as exc:

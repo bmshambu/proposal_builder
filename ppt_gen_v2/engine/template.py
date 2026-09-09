@@ -20,7 +20,8 @@ import os
 import shutil
 import zipfile
 
-from .library import Library, LibraryError, normalise_block_map
+from .library import (Library, LibraryError, _entry_id,
+                      normalise_block_map)
 
 MANIFEST = "template.json"
 LIBRARY = "library.pptx"
@@ -118,6 +119,59 @@ class Template:
                         "itself always wins over this file.",
             "blocks": mapping})
         return self.blocks_path
+
+    def reconcile_blocks(self):
+        """Re-key `blocks.json` against the library as it is now.
+
+        The sidecar maps a slide *part name* to a block id, so anything that
+        renumbers parts silently breaks it — a designer reordering the deck, or
+        PowerPoint rewriting the package during a repair. Nothing errors: the
+        ids simply start naming the wrong slides, and every rule quietly pulls
+        the wrong content. That is the worst kind of wrong, so it is worth a
+        deliberate step rather than a hope.
+
+        Matching is by the title recorded when the id was assigned, since that
+        is what the sidecar carries. -> report dict; nothing is written unless
+        something actually moved.
+        """
+        raw = self.raw_block_map
+        if not raw:
+            return {"moved": [], "unmatched": [], "vanished": [], "changed": False}
+
+        with self.open_library() as lib:
+            current = [(os.path.basename(b.part), b.title) for b in lib.ordered()]
+
+        def entry_title(e):
+            return e.get("title") if isinstance(e, dict) else None
+
+        taken, moved, unmatched = set(), [], []
+        resolved = {}
+        # 1. a part that still exists and still has its recorded title is settled
+        by_part = dict(current)
+        for part, e in raw.items():
+            if part in by_part and entry_title(e) == by_part[part]:
+                resolved[part] = e
+                taken.add(part)
+        # 2. anything left is matched on its recorded title, in deck order
+        for part, e in raw.items():
+            if part in resolved:
+                continue
+            title = entry_title(e)
+            hit = next((p for p, t in current
+                        if p not in taken and title and t == title), None)
+            if hit:
+                resolved[hit] = e
+                taken.add(hit)
+                moved.append((_entry_id(e), part, hit))
+            else:
+                unmatched.append((_entry_id(e), part))
+
+        vanished = [p for p, _t in current if p not in taken]
+        changed = bool(moved)
+        if changed:
+            self.write_block_map(resolved)
+        return {"moved": moved, "unmatched": unmatched, "vanished": vanished,
+                "changed": changed}
 
     def rename_block(self, old, new):
         """Rename a block in the sidecar, keeping rules.json in step."""
