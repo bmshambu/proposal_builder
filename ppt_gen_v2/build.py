@@ -254,10 +254,14 @@ def cmd_verify(args):
     for row in report["results"]:
         mark = "ok  " if row.get("exact") else (
             "sel " if row.get("selection_ok") else "FAIL")
-        detail = row.get("error") or ("%d vs %d slides, %d matched"
-                                      % (row.get("our_slides", 0),
-                                         row.get("templafy_slides", 0),
-                                         row.get("matched", 0)))
+        methods = row.get("by_method") or {}
+        detail = row.get("error") or (
+            "%d vs %d slides, %d matched (%s)%s"
+            % (row.get("our_slides", 0), row.get("templafy_slides", 0),
+               row.get("matched", 0),
+               ", ".join("%s %d" % kv for kv in sorted(methods.items())) or "-",
+               (", %d out of order" % row["out_of_order"])
+               if row.get("out_of_order") else ""))
         print("  %s %-26s %-34s %s"
               % (mark, row["deck"], row["verdict"], detail))
         if args.verbose:
@@ -271,9 +275,13 @@ def cmd_verify(args):
                           % (seg["ours"][:40], seg["templafy"][:40]))
 
     print("")
-    print("%d of %d deck(s) match exactly; %d have the right slides in the "
-          "right order" % (report["exact"], report["compared"],
-                           report["selection_ok"]))
+    ordered = sum(1 for r in report["results"] if r.get("order_ok"))
+    print("%d of %d deck(s) reproduce Templafy exactly"
+          % (report["exact"], report["compared"]))
+    print("   %d have the right slides (no slide missing or extra)"
+          % report["selection_ok"])
+    print("   %d have them in the right order" % ordered)
+    print("   the rest differ only in text - see the lines above")
     if report["unpaired_decks"]:
         print("  ! %d deck(s) had no payload: %s"
               % (len(report["unpaired_decks"]),

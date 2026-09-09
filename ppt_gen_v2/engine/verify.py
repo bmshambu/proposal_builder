@@ -50,7 +50,15 @@ def align(original, rebuilt):
             if b["index"] in used:
                 continue
             how, value = pf.slide_similarity(a, b)
-            if value > score:
+            # Slides copied from one master share shapes, so several can score
+            # alike. Both decks come from the same library and should be in
+            # nearly the same order, so break a tie by position - otherwise
+            # greedy matching pairs slide 3 with slide 7 and the order check
+            # reports a difference that is not there.
+            if value > score + 1e-9 or (
+                    best is not None and abs(value - score) <= 1e-9
+                    and abs(b["index"] - a["index"])
+                    < abs(best["index"] - a["index"])):
                 best, method, score = b, how, value
         if best is not None and score >= MATCH_THRESHOLD:
             used.add(best["index"])
@@ -82,7 +90,12 @@ def compare(original_path, rebuilt_path):
                                                rebuilt["slides"])
 
     sequence = [b["index"] for _a, b, _m, _s in pairs]
-    order_ok = all(sequence[i] <= sequence[i + 1] for i in range(len(sequence) - 1))
+    # How MANY slides are out of place, not merely whether any are: one swapped
+    # pair and a wholly scrambled deck are different problems, and a yes/no
+    # answer cannot tell you which you have.
+    out_of_order = sum(1 for i in range(len(sequence) - 1)
+                       if sequence[i] > sequence[i + 1])
+    order_ok = out_of_order == 0
 
     by_method, text_differs = {}, []
     for a, b, method, _score in pairs:
@@ -117,6 +130,7 @@ def compare(original_path, rebuilt_path):
 
     return {
         "verdict": verdict, "order_ok": order_ok,
+        "out_of_order": out_of_order,
         "templafy_slides": original["slide_count"],
         "our_slides": rebuilt["slide_count"],
         "matched": len(pairs), "by_method": by_method,
