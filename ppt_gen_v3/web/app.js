@@ -120,6 +120,29 @@ function humanDate(raw) {
     : `${MONTHS[m - 1]} ${+s.slice(6, 8)}, ${s.slice(0, 4)}`;
 }
 
+/** Preview a date in a chosen format. Mirrors engine/bindings.date_formats(),
+ *  so the sample on the Values screen is what the deck will actually say -
+ *  a preview that renders a date differently from the builder is worse than
+ *  no preview, because it is believed. */
+function formatted(raw, fmt) {
+  const s = String(raw ?? "").replace(/\D/g, "");
+  if (s.length !== 8) return String(raw ?? "");
+  const y = s.slice(0, 4), m = +s.slice(4, 6), d = +s.slice(6, 8);
+  if (m < 1 || m > 12) return String(raw);
+  const mon = MONTHS[m - 1], ab = mon.slice(0, 3);
+  const p2 = (n) => String(n).padStart(2, "0");
+  return ({
+    long_comma: `${mon} ${d}, ${y}`,
+    day_month: `${d} ${mon} ${y}`,
+    abbr_comma: `${ab} ${d}, ${y}`,
+    day_abbr: `${d} ${ab} ${y}`,
+    us_slash: `${p2(m)}/${p2(d)}/${y}`,
+    eu_slash: `${p2(d)}/${p2(m)}/${y}`,
+    iso: `${y}-${p2(m)}-${p2(d)}`,
+    raw: s,
+  })[fmt] ?? s;
+}
+
 // ------------------------------------------------------------- thumbnails
 /** engine/svg.py returns a viewBox-only <svg>, so it scales to whatever box we
  *  give it. Injecting the class beats wrapping it: the existing CSS already
@@ -672,11 +695,19 @@ function renderMapping() {
       state = `<span class="pill bad">unbound</span>`;
     } else if (bind.from === "field") {
       const spec = S.fields[bind.field] || {};
-      const fmt = bind.format ? `<select data-bind="${esc(key)}" data-part="format">
-        ${Object.entries(DATE_FORMATS).map(([k, v]) =>
-        `<option value="${k}"${k === bind.format ? " selected" : ""}>${v}</option>`).join("")}</select>` : "";
+      // Offer the format whenever the field holds a date, not only when one has
+      // already been chosen. Showing it only for bindings that already had a
+      // format made it unreachable: an imported library's starter binding has
+      // none, so the deck printed 20261130 and there was no control anywhere to
+      // say otherwise.
+      const fmt = spec.kind === "date"
+        ? `<select data-bind="${esc(key)}" data-part="format">
+             <option value=""${bind.format ? "" : " selected"}>as stored (${esc(spec.eg ?? "")})</option>
+             ${Object.entries(DATE_FORMATS).map(([k, v]) =>
+          `<option value="${k}"${k === bind.format ? " selected" : ""}>${v}</option>`).join("")}
+           </select>` : "";
       from = `${kind("field")} ${pick(bind.field)} ${fmt}`;
-      renders = `<span class="preview">${esc(bind.format ? humanDate(spec.eg)
+      renders = `<span class="preview">${esc(bind.format ? formatted(spec.eg, bind.format)
         : (spec.eg ?? (spec.values || ["—"])[0] ?? "—"))}</span>`;
       state = names.includes(bind.field)
         ? `<span class="pill ok">bound</span>`
@@ -1039,7 +1070,11 @@ document.addEventListener("change", (e) => {
       const chosen = Object.keys(S.fields).find(f => label(f) === t.options[t.selectedIndex].text);
       S.bindings[key] = { ...bind, from: "field", field: chosen || t.value };
     } else if (part === "format") {
-      S.bindings[key] = { ...bind, format: t.value };
+      // "as stored" means no format key at all, not format:"" - bindings.py
+      // would try to render an empty format name and get nothing.
+      const next = { ...bind };
+      if (t.value) next.format = t.value; else delete next.format;
+      S.bindings[key] = next;
     } else if (part === "value") {
       S.bindings[key] = { ...bind, from: "literal", value: t.value };
     }

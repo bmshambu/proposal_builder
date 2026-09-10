@@ -140,7 +140,7 @@ global.fetch = async (url) => {
 try {
   // app.js is strict mode, so its scope does not leak into ours. Ask for the
   // one function this file needs to test directly.
-  eval(js + "\n;globalThis.__readValue = readValue;");
+  eval(js + "\n;globalThis.__readValue = readValue; globalThis.__formatted = formatted;");
 } catch (err) {
   problems.push("the page threw while initialising: " + err.message);
 }
@@ -204,6 +204,23 @@ try {
       problems.push(`readValue: ${why} — got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
   }
   console.log("readValue: " + cases.length + " case(s) checked");
+
+  // The Values screen previews a date in the chosen format. If that preview
+  // disagrees with engine/bindings.date_formats() it is worse than no preview,
+  // because it is believed. These are the engine's exact strings.
+  const FORMATS = {
+    long_comma: "November 30, 2026", day_month: "30 November 2026",
+    abbr_comma: "Nov 30, 2026", day_abbr: "30 Nov 2026",
+    us_slash: "11/30/2026", eu_slash: "30/11/2026",
+    iso: "2026-11-30", raw: "20261130",
+  };
+  if (typeof globalThis.__formatted !== "function")
+    problems.push("formatted() never got defined");
+  else for (const [k, v] of Object.entries(FORMATS)) {
+    const got = globalThis.__formatted("20261130", k);
+    if (got !== v) problems.push(`date format ${k}: page says "${got}", engine says "${v}"`);
+  }
+  console.log("date formats: " + Object.keys(FORMATS).length + " checked against the engine");
 
   console.log("\n" + calls.length + " API call(s): "
     + [...new Set(calls.map(u => u.split("?")[0]))].join(", "));
