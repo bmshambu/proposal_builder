@@ -638,8 +638,11 @@ def build_slides(token: str,
                      "png": "/api/builds/%s/png/%d" % (token, i),
                      "svg": None, "unsupported": [], "error": None}
                     for i in range(1, len(pngs) + 1)]}
-            except rendermod.RenderError as exc:
-                why = str(exc)
+            except Exception as exc:
+                # Anything at all: a preview that 500s is worse than a preview
+                # that admits it is an approximation.
+                why = str(exc) if isinstance(exc, rendermod.RenderError) \
+                    else "%s: %s" % (type(exc).__name__, exc)
         if engine == "powerpoint":
             raise HTTPException(503, why or "PowerPoint is not available here")
 
