@@ -1,5 +1,6 @@
 ﻿# generated / local state - never commit templates, decks or payloads
 data/builds/
+data/renders/
 data/payloads/
 templates/*/
 !templates/demo/

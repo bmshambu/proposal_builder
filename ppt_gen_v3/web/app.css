@@ -409,9 +409,15 @@ svg.thumb{height:auto}
 .stage{flex:1;min-width:0;display:flex;align-items:center;justify-content:center;
   background:var(--panel-2);border:1px solid var(--line);border-radius:6px;
   padding:10px;overflow:hidden}
+/* object-fit matters once this is a PNG: width:100% with a max-height would
+   otherwise squash an exported slide instead of letterboxing it, and a preview
+   with the wrong aspect ratio is a preview that lies about the layout. */
 .stage .slide{width:100%;height:auto;max-height:62vh;display:block;
-  border:1px solid var(--line);border-radius:3px;background:#fff}
+  object-fit:contain;border:1px solid var(--line);border-radius:3px;
+  background:#fff}
 .slide-fail{padding:60px 20px;text-align:center;color:var(--bad);font-size:13px}
+.slide-wait{padding:60px 20px;text-align:center;color:var(--muted);font-size:13px}
+.hint.warn-text{color:var(--warn)}
 .nav{border:1px solid var(--line);background:var(--panel);color:var(--muted);
   border-radius:8px;width:38px;height:62px;font-size:22px;line-height:1;flex:none}
 .nav:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}

@@ -182,13 +182,47 @@ def main():
     # The viewer renders the BUILT file, not the library - so it shows what
     # selection produced and what every placeholder became. A preview of the
     # library would show {{ClientName}} and be reassuring about the wrong thing.
-    slides = client.get("/api/builds/%s/slides" % built["token"]).json()
-    check("GET /builds/{token}/slides", len(slides) == built["slides"],
+    # Two renderers. `svg` is always there; `powerpoint` is the real thing and
+    # is what the viewer asks for, so both paths are checked - including that
+    # the answer says which one drew it, because a preview that quietly
+    # degrades to an approximation is a preview nobody can use as evidence.
+    body = client.get("/api/builds/%s/slides?engine=svg" % built["token"]).json()
+    slides = body["slides"]
+    check("GET /builds/{token}/slides?engine=svg",
+          body["engine"] == "svg" and len(slides) == built["slides"],
           "%d slide(s), all rendered: %s"
           % (len(slides), all(s["svg"] for s in slides)))
     check("the preview shows filled values, not placeholders",
           not any("{{" in (s["svg"] or "") for s in slides),
           "first slide reads %r" % (slides[0]["title"][:38] if slides else ""))
+
+    from engine import render as rendermod
+    can_ppt, why = rendermod.available()
+    auto = client.get("/api/builds/%s/slides" % built["token"]).json()
+    check("the viewer is told which renderer drew the deck",
+          auto["engine"] == ("powerpoint" if can_ppt else "svg"),
+          "%s%s" % (auto["engine"], "" if can_ppt else " - %s" % why))
+    if can_ppt:
+        check("PowerPoint exported every slide",
+              len(auto["slides"]) == built["slides"]
+              and all(s["png"] and not s["svg"] for s in auto["slides"]),
+              "%d image(s)" % len(auto["slides"]))
+        img = client.get(auto["slides"][0]["png"])
+        check("GET /builds/{token}/png/{n}",
+              img.status_code == 200 and img.content[1:4] == b"PNG",
+              "%d bytes, a real png" % len(img.content))
+        check("a slide nobody exported is 404",
+              client.get("/api/builds/%s/png/999" % built["token"]).status_code
+              == 404)
+    else:
+        # Refusing beats pretending: a caller that needs fidelity must be able
+        # to tell that it did not get it.
+        check("engine=powerpoint refuses rather than falling back",
+              client.get("/api/builds/%s/slides?engine=powerpoint"
+                         % built["token"]).status_code == 503, why)
+    check("an unknown renderer is refused",
+          client.get("/api/builds/%s/slides?engine=magic"
+                     % built["token"]).status_code == 422)
     check("a bad build token is refused",
           client.get("/api/builds/zz/slides").status_code == 400)
     check("a missing build is 404",

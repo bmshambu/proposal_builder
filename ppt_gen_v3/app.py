@@ -19,7 +19,7 @@ What is deliberately *not* here yet, so nobody assumes it is:
     convention right now, not a control. Anyone who can reach this can edit
     rules for every library.
   - **Builds are not cleaned up.** `data/builds/` grows until someone empties
-    it.
+    it, and `data/renders/` holds a folder of slide images beside each one.
 
 Both are fine for a single author on localhost and are the first things to fix
 before more than one person can reach it.
@@ -47,6 +47,7 @@ from engine import (Rules, Template, build_template,               # noqa: E402
 from engine import bindings                                        # noqa: E402
 from engine.rules import flatten                                   # noqa: E402
 from engine import payloads as payloadsmod                         # noqa: E402
+from engine import render as rendermod                             # noqa: E402
 from engine import svg as svgmod                                   # noqa: E402
 from engine.template import TemplateError                          # noqa: E402
 from engine.verify import block_names, compare                     # noqa: E402
@@ -55,7 +56,8 @@ WEB = os.path.join(HERE, "web")
 TEMPLATES = os.path.join(HERE, "templates")
 PAYLOADS = os.path.join(HERE, "data", "payloads")
 BUILDS = os.path.join(HERE, "data", "builds")
-for _d in (TEMPLATES, PAYLOADS, BUILDS):
+RENDERS = os.path.join(HERE, "data", "renders")
+for _d in (TEMPLATES, PAYLOADS, BUILDS, RENDERS):
     os.makedirs(_d, exist_ok=True)
 
 # One writer at a time. A single author cannot really collide with themselves,
@@ -567,24 +569,24 @@ def post_build(body: Answers, tpl: Template = Depends(library)):
             "filename": "%s.pptx" % os.path.basename(tpl.folder)}
 
 
-@app.get("/api/builds/{token}/slides", tags=["build"])
-def build_slides(token: str):
-    """The built deck, slide by slide, as SVG.
-
-    The same in-process renderer the library screen uses, pointed at the file
-    that was just built rather than at the template. That matters: it shows the
-    deck *after* selection and after every placeholder was filled, which is the
-    only version anyone actually receives. Downloading and opening PowerPoint to
-    find a stray `{{...}}` is a slow way to learn something the screen can say.
-    """
+def build_path(token: str) -> str:
     if not re.fullmatch(r"[0-9a-f]{16}", token or ""):
         raise HTTPException(400, "bad build token")
     path = os.path.join(BUILDS, token + ".pptx")
     if not os.path.exists(path):
         raise HTTPException(404, "that build is gone")
+    return path
 
+
+def slide_titles(path: str) -> List[str]:
+    """Block titles in file order, for the filmstrip's tooltips."""
     from engine.library import Library
+    with Library(path) as lib:
+        return [b.title for b in lib.ordered()]
 
+
+def slides_as_svg(path: str) -> List[dict]:
+    from engine.library import Library
     out = []
     with Library(path) as lib:
         for i, block in enumerate(lib.ordered(), 1):
@@ -592,10 +594,67 @@ def build_slides(token: str):
                 r = svgmod.render_slide(lib, block.part)
             except Exception as exc:      # one bad slide must not lose the rest
                 r = {"svg": None, "error": "%s: %s" % (type(exc).__name__, exc)}
-            out.append({"index": i, "title": block.title, "svg": r.get("svg"),
+            out.append({"index": i, "title": block.title, "png": None,
+                        "svg": r.get("svg"),
                         "unsupported": r.get("unsupported") or [],
                         "error": r.get("error")})
     return out
+
+
+@app.get("/api/builds/{token}/slides", tags=["build"])
+def build_slides(token: str,
+                 engine: str = Query("auto", pattern="^(auto|powerpoint|svg)$")):
+    """The built deck, slide by slide — the real thing where we can get it.
+
+    It shows the deck *after* selection and after every placeholder was filled,
+    which is the only version anyone actually receives. Downloading and opening
+    PowerPoint to find a stray `{{...}}` is a slow way to learn something the
+    screen can say.
+
+    Two renderers, and the answer says which one drew it:
+
+      **powerpoint** — the slides exported by PowerPoint itself. Exact, because
+      it *is* PowerPoint: real fonts, real wrapping, charts and SmartArt.
+
+      **svg** — `engine/svg.py`, in-process and always available. An honest
+      approximation, and on a template that leans on inherited styling it can
+      look like a skeleton of the deck. Good enough to answer "which slide is
+      this"; not good enough to answer "is this what the client sees".
+
+    `engine=powerpoint` refuses rather than quietly falling back, so a caller
+    that needs fidelity can tell the difference.
+    """
+    path = build_path(token)
+
+    why = None
+    if engine in ("auto", "powerpoint"):
+        ok, why = rendermod.available()
+        if ok:
+            try:
+                pngs = rendermod.deck_to_images(path, os.path.join(RENDERS, token))
+                titles = slide_titles(path)
+                return {"engine": "powerpoint", "why": None, "slides": [
+                    {"index": i, "title": titles[i - 1] if i <= len(titles) else "",
+                     "png": "/api/builds/%s/png/%d" % (token, i),
+                     "svg": None, "unsupported": [], "error": None}
+                    for i in range(1, len(pngs) + 1)]}
+            except rendermod.RenderError as exc:
+                why = str(exc)
+        if engine == "powerpoint":
+            raise HTTPException(503, why or "PowerPoint is not available here")
+
+    return {"engine": "svg", "why": why, "slides": slides_as_svg(path)}
+
+
+@app.get("/api/builds/{token}/png/{index}", tags=["build"])
+def build_png(token: str, index: int):
+    """One exported slide image. Written by the call above; never rendered here,
+    so a missing file means the export was cleared, not that it failed."""
+    build_path(token)
+    path = os.path.join(RENDERS, token, "slide-%03d.png" % index)
+    if not os.path.exists(path):
+        raise HTTPException(404, "that slide has not been rendered")
+    return FileResponse(path, media_type="image/png")
 
 
 @app.get("/download/{token}", tags=["build"])

@@ -100,6 +100,11 @@ const CANNED = [
     payloads: [{ label: "p1", answers: { AuditType: "New Audit Client", DueDate: "20261130", Quality: true } }],
     shared: false,
   }],
+  [/\/api\/builds\/[0-9a-f]+\/slides/, {
+    engine: "powerpoint", why: null,
+    slides: [{ index: 1, title: "Cover", png: "/api/builds/x/png/1", svg: null, unsupported: [], error: null },
+    { index: 2, title: "Fees", png: "/api/builds/x/png/2", svg: null, unsupported: [], error: null }],
+  }],
   [/\/api\/libraries$/, [{ id: "demo", name: "Demo", description: "", slides: 3, unnamed: 0, answer_sets: [], real: true }]],
   [/\/thumbs/, [{ id: "cover", title: "Cover", svg: DEMO_SVG, placeholders: [] },
   { id: "scope", title: "Scope", svg: DEMO_SVG, placeholders: ["ClientName"] },
@@ -141,7 +146,7 @@ global.fetch = async (url) => {
 try {
   // app.js is strict mode, so its scope does not leak into ours. Ask for the
   // one function this file needs to test directly.
-  eval(js + "\n;globalThis.__readValue = readValue; globalThis.__formatted = formatted; globalThis.__md = md;");
+  eval(js + "\n;globalThis.__readValue = readValue; globalThis.__formatted = formatted; globalThis.__md = md; globalThis.__viewer = { load: loadBuiltSlides, big, small };");
 } catch (err) {
   problems.push("the page threw while initialising: " + err.message);
 }
@@ -205,6 +210,34 @@ try {
       problems.push(`readValue: ${why} — got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
   }
   console.log("readValue: " + cases.length + " case(s) checked");
+
+  // The viewer shows one of two things and must not confuse them: a PNG that
+  // PowerPoint exported, or our own SVG approximation. Showing the second while
+  // implying the first is how a preview stops being evidence.
+  const V = globalThis.__viewer;
+  if (!V) {
+    problems.push("the deck viewer never got defined");
+  } else {
+    await V.load("0123456789abcdef");
+    const stage = (boxes["viewer-stage"] || {}).innerHTML || "";
+    const strip = (boxes["viewer-strip"] || {}).innerHTML || "";
+    const how = (boxes["viewer-how"] || {}).innerHTML || "";
+    if (!/<img class="slide" src="\/api\/builds\/x\/png\/1"/.test(stage))
+      problems.push("viewer stage does not show the exported PNG");
+    if ((strip.match(/<img class="fthumb"/g) || []).length !== 2)
+      problems.push("filmstrip does not show one exported PNG per slide");
+    if (!/loading="lazy"/.test(strip))
+      problems.push("filmstrip images are not lazy - 60 slides would load at once");
+    if (!/rendered by PowerPoint/.test(how))
+      problems.push("the viewer does not say PowerPoint drew it");
+    const approx = V.big({ index: 1, png: null, svg: DEMO_SVG });
+    if (!/<svg class="slide"/.test(approx))
+      problems.push("viewer cannot fall back to the SVG renderer");
+    const gone = V.big({ index: 1, png: null, svg: null, error: "boom" });
+    if (!/did not render/.test(gone) || !/boom/.test(gone))
+      problems.push("a slide that failed to render does not say so");
+    console.log("viewer: PNG, SVG fallback and failure all render");
+  }
 
   // The Values screen previews a date in the chosen format. If that preview
   // disagrees with engine/bindings.date_formats() it is worse than no preview,

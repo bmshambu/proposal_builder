@@ -1027,7 +1027,30 @@ $("preset").onchange = function () {
   if (!$("testbar").classList.contains("open")) $("inputs-toggle").click();
 };
 
-// -------------------------------------------------------- the deck viewer
+/* -------------------------------------------------------- the deck viewer
+ *
+ * A slide arrives one of two ways and the difference matters to whoever is
+ * looking. `png` is the slide exported by PowerPoint — the real thing. `svg` is
+ * our own renderer, which is an approximation and says so in the panel header;
+ * on a template that leans on inherited styling it can come back looking like a
+ * skeleton, so it must never be mistaken for what the client receives.
+ */
+function big(s) {
+  if (s.png) return `<img class="slide" src="${s.png}" alt="Slide ${s.index}">`;
+  if (s.svg) return s.svg.replace("<svg ", '<svg class="slide" ');
+  return `<div class="slide-fail">This slide did not render.<br>
+    <span class="fld-note">${esc(s.error || "")}</span><br>
+    <span class="fld-note">It is still in the file — only the preview
+    failed.</span></div>`;
+}
+
+function small(s) {
+  // Lazy: a 60-slide filmstrip is 60 images, and only a handful are on screen.
+  if (s.png) return `<img class="fthumb" loading="lazy" src="${s.png}" alt="">`;
+  if (s.svg) return s.svg.replace("<svg ", '<svg class="fthumb" ');
+  return '<span class="fthumb fail"></span>';
+}
+
 function renderViewer() {
   const panel = $("viewer-panel");
   if (!S.slides || !S.slides.length) { panel.hidden = true; return; }
@@ -1037,12 +1060,7 @@ function renderViewer() {
   const s = S.slides[at];
 
   $("viewer-count").textContent = `(${at + 1} of ${S.slides.length})`;
-  $("viewer-stage").innerHTML = s.svg
-    ? s.svg.replace("<svg ", '<svg class="slide" ')
-    : `<div class="slide-fail">This slide did not render.<br>
-       <span class="fld-note">${esc(s.error || "")}</span><br>
-       <span class="fld-note">It is still in the file — only the preview
-       failed.</span></div>`;
+  $("viewer-stage").innerHTML = big(s);
   $("viewer-prev").disabled = at === 0;
   $("viewer-next").disabled = at === S.slides.length - 1;
 
@@ -1050,8 +1068,7 @@ function renderViewer() {
     <button class="frame ${i === at ? "on" : ""}" data-slide="${i}"
             title="${esc(x.title || "")}">
       <span class="fno">${i + 1}</span>
-      ${x.svg ? x.svg.replace("<svg ", '<svg class="fthumb" ')
-      : '<span class="fthumb fail"></span>'}
+      ${small(x)}
     </button>`).join("");
   const active = $("viewer-strip").querySelector(".frame.on");
   if (active && active.scrollIntoView)
@@ -1079,11 +1096,27 @@ document.addEventListener("keydown", (e) => {
 });
 
 async function loadBuiltSlides(token) {
+  const panel = $("viewer-panel"), note = $("viewer-how");
+  panel.hidden = false;
+  $("viewer-count").textContent = "";
+  $("viewer-strip").innerHTML = "";
+  $("viewer-stage").innerHTML =
+    `<div class="slide-wait">Rendering the deck…<br>
+     <span class="fld-note">PowerPoint is drawing each slide. First look at a
+     deck takes a moment; after that it is instant.</span></div>`;
+  note.textContent = "";
   try {
-    S.slides = await getJSON(`/api/builds/${token}/slides`);
+    const r = await getJSON(`/api/builds/${token}/slides`);
+    S.slides = r.slides || [];
     S.slideAt = 0;
+    note.className = r.engine === "powerpoint" ? "hint" : "hint warn-text";
+    note.innerHTML = r.engine === "powerpoint"
+      ? "rendered by PowerPoint &middot; arrow keys to move"
+      : `approximation, not PowerPoint &mdash; ${esc(r.why || "PowerPoint is "
+        + "not available here")}. Check the downloaded file before trusting how
+         this looks.`;
     renderViewer();
-    const broke = S.slides.filter(s => !s.svg).length;
+    const broke = S.slides.filter(s => !s.png && !s.svg).length;
     if (broke) flash(`${broke} slide(s) could not be previewed — they are still `
       + `in the downloaded file`, "bad");
   } catch (err) {

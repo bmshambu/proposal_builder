@@ -38,11 +38,29 @@ web/              index.html, app.css, app.js
 templates/<id>/   one library: library.pptx, rules.json, blocks.json
 data/payloads/    answer sets, for the field catalogue (gitignored)
 data/builds/      built decks awaiting download (gitignored)
+data/renders/     exported slide images, one folder per build (gitignored)
 tools/            checks that run without a browser
 ```
 
 `rules.json` on disk is the source of truth. The app is an editor for it, not a
 database in front of it — every rule stays readable, diffable and hand-editable.
+
+## Two renderers, and the screen says which
+
+The deck viewer shows the built file slide by slide. Where PowerPoint is
+installed it draws them — `engine/render.py` drives it over COM and exports real
+images, so the preview has the real fonts, the real wrapping, charts and
+SmartArt. That needs `pywin32`, which is why it is optional: without it, or off
+Windows, `engine/svg.py` draws an approximation from the OOXML instead.
+
+The approximation is genuinely useful at thumbnail size and genuinely
+misleading at full size — on a template that leans on inherited styling it comes
+back looking like a skeleton of the deck. So the viewer labels which renderer
+drew the page, and `?engine=powerpoint` refuses rather than falling back, for
+callers that need fidelity.
+
+`engine/render.py` never quits a PowerPoint it did not start, so an export
+cannot close an author's own unsaved work.
 
 ## The one list
 
@@ -70,7 +88,8 @@ Stated plainly so nobody assumes otherwise:
 
 - **No authentication.** The author/user split is a convention, not a control.
   Anyone who can reach the app can edit rules for every library.
-- **`data/builds/` is never cleaned up.** It grows until someone empties it.
+- **`data/builds/` is never cleaned up.** It grows until someone empties
+  it, and `data/renders/` holds a folder of images beside each build.
 - **One library's rules, one writer.** There is a lock, but no version check
   across browser tabs.
 
