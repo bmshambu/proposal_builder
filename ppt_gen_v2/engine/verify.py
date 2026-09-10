@@ -15,7 +15,11 @@ up; they have a *similarity*, and matching them is an assignment problem:
   2. layout and geometry overlap — survives placeholder filling,
   3. text overlap — only meaningful for static slides,
 
-taking the best signal available, greedily, one slide to one slide.
+taking the best signal available, one slide to one slide — and taking (1)
+first, across the whole deck, before anything competes on (2) or (3). Identity
+is not a stronger kind of resemblance; a slide that shares creationIds *is* the
+same slide, and letting a neighbour claim it on geometry alone renames the
+difference.
 
 One category deserves its own name rather than being counted as an error.
 Templafy regenerates data-driven slides (fees, partner names, RFP tables) per
@@ -38,13 +42,45 @@ MATCH_THRESHOLD = 0.34
 
 
 def align(original, rebuilt):
-    """Greedy best-match, one slide to one slide.
+    """Best-match, one slide to one slide. Exact identity is claimed first.
 
     -> (pairs, only_original, only_rebuilt) where pairs is
     [(original, rebuilt, method, score)].
+
+    Two passes, and the first one is the point. Matching greedily in a single
+    sweep lets an early slide take a partner on a *weak* signal that a later
+    slide matches exactly: every slide in a deck shares a layout and often an
+    identically-placed title box, so structural similarity is high between
+    slides that are not the same slide at all.
+
+    Seen on a deck with one slide deliberately removed: the missing slide's
+    neighbour was consumed structurally, and the report named the wrong slide
+    as missing. The verdict was right and the name was not, which is worse than
+    a plain failure - it points the author at a row that is fine.
+
+    So: pair everything that shares shape creationIds first, since that is
+    identity rather than resemblance, then let the rest compete for what is
+    left.
     """
-    used, pairs, only_original = set(), [], []
+    used, pairs, claimed = set(), [], set()
+
     for a in original:
+        best, score = None, 0.0
+        for b in rebuilt:
+            if b["index"] in used:
+                continue
+            how, value = pf.slide_similarity(a, b)
+            if how != "creationId":
+                continue
+            if value > score + 1e-9:
+                best, score = b, value
+        if best is not None and score >= MATCH_THRESHOLD:
+            used.add(best["index"])
+            claimed.add(a["index"])
+            pairs.append((a, best, "creationId", round(score, 3)))
+
+    only_original = []
+    for a in (s for s in original if s["index"] not in claimed):
         best, method, score = None, None, 0.0
         for b in rebuilt:
             if b["index"] in used:
@@ -65,6 +101,12 @@ def align(original, rebuilt):
             pairs.append((a, best, method, round(score, 3)))
         else:
             only_original.append(a)
+
+    # Back into Templafy's order. `compare()` reads the order check straight
+    # off this list, so leaving it in match order - identity pass first, the
+    # rest after - would invent displacements that are not there.
+    pairs.sort(key=lambda p: p[0]["index"])
+    only_original.sort(key=lambda s: s["index"])
     only_rebuilt = [b for b in rebuilt if b["index"] not in used]
     return pairs, only_original, only_rebuilt
 
