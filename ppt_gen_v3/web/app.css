@@ -1,0 +1,351 @@
+/* Lifted whole from the frozen mockup. It was checked for contrast in
+   both themes and for var() in SVG attributes; re-run tools/ against
+   web/index.html rather than editing colours by eye. */
+/* ------------------------------------------------------------------ theme
+   The palette is the firm's published brand blues. Two things it forced:
+
+   1. KPMG Blue (#00338D) is very dark. It is excellent as an accent on white
+      and unreadable as one on a dark ground, so dark mode moves the accent to
+      the light brand blue (#0091DA) rather than tinting the same hex and
+      hoping. A brand palette is a light-mode palette unless someone says
+      otherwise.
+   2. Status colours (warn/bad/ok) are not in the brand palette and must not
+      be forced into it - a red that reads as "brand" is a red nobody reacts to.
+
+   Every colour below is a token. Nothing in the rules or the SVG thumbnails
+   carries a literal hex, so a firm with a different palette changes this block
+   and nothing else. */
+:root{
+  color-scheme:light;
+  --brand-1:#00338D;   /* KPMG Blue    */
+  --brand-2:#005EB8;   /* Medium Blue  */
+  --brand-3:#0091DA;   /* Light Blue   */
+  --brand-4:#483698;   /* Violet       */
+  --brand-5:#470A68;   /* Purple       */
+
+  --bg:#F3F5F9; --panel:#FFFFFF; --panel-2:#FAFBFD; --hover:#F6F8FC;
+  --ink:#141922; --muted:#5B6779; --off:#7C889B; --off-soft:#C2CAD6;
+  --line:#DFE4EC; --line-strong:#BFC9D9;
+  --field-bg:#FFFFFF; --chip-bg:#EFF2F7;
+
+  --accent:var(--brand-1); --accent-ink:#FFFFFF; --accent-dim:#7B96C6;
+  --accent-soft:#E9EFF9; --accent-line:#BCCDE8;
+
+  --warn:#8A5300; --warn-soft:#FDF3E3; --warn-line:#EFDCB6;
+  --bad:#A81E1E;  --bad-soft:#FCECEC;  --bad-line:#F0CACA;
+  --ok:#0E6B45;   --ok-soft:#E7F4EC;   --ok-line:#C7E3D4;
+
+  --thumb-bg:#FFFFFF; --thumb-band:#E4EBF7; --thumb-line:#E6E9EF;
+  --thumb-ph:#C3D5EE;
+  --shadow:rgba(16,24,40,.06); --shadow-up:rgba(16,24,40,.07);
+  --radius:8px; --mono:ui-monospace,Consolas,"Courier New",monospace;
+}
+
+/* Dark is a separate set of values, not the light ones dimmed. Both the
+   system default and the explicit toggle need saying: the media query cannot
+   express "the user chose dark", and the attribute rule cannot express "the
+   user chose nothing and their OS is dark". */
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#0B0F17; --panel:#141A25; --panel-2:#111823; --hover:#1A2230;
+    --ink:#E7ECF4; --muted:#98A4B6; --off:#6D7A8D; --off-soft:#3C4757;
+    --line:#232D3C; --line-strong:#334053;
+    --field-bg:#0F1620; --chip-bg:#1B2432;
+    --accent:#3FA0E2; --accent-ink:#06111C; --accent-dim:#4E6D93;
+    --accent-soft:#12263A; --accent-line:#2A4967;
+    --warn:#E2A75A; --warn-soft:#241C10; --warn-line:#463519;
+    --bad:#F09090;  --bad-soft:#2A1517;  --bad-line:#4B2327;
+    --ok:#63C795;   --ok-soft:#0F2419;   --ok-line:#1E4632;
+    --thumb-bg:#1B2431; --thumb-band:#1E3450; --thumb-line:#2A3546;
+    --thumb-ph:#2F5C8C;
+    --shadow:rgba(0,0,0,.4); --shadow-up:rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0B0F17; --panel:#141A25; --panel-2:#111823; --hover:#1A2230;
+  --ink:#E7ECF4; --muted:#98A4B6; --off:#6D7A8D; --off-soft:#3C4757;
+  --line:#232D3C; --line-strong:#334053;
+  --field-bg:#0F1620; --chip-bg:#1B2432;
+  --accent:#3FA0E2; --accent-ink:#06111C; --accent-dim:#4E6D93;
+  --accent-soft:#12263A; --accent-line:#2A4967;
+  --warn:#E2A75A; --warn-soft:#241C10; --warn-line:#463519;
+  --bad:#F09090;  --bad-soft:#2A1517;  --bad-line:#4B2327;
+  --ok:#63C795;   --ok-soft:#0F2419;   --ok-line:#1E4632;
+  --thumb-bg:#1B2431; --thumb-band:#1E3450; --thumb-line:#2A3546;
+  --thumb-ph:#2F5C8C;
+  --shadow:rgba(0,0,0,.4); --shadow-up:rgba(0,0,0,.5);
+}
+*{box-sizing:border-box}
+/* several things here are hidden with the `hidden` attribute while their own
+   rule sets display:flex, which would win. Settle it once. */
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--ink);
+     font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}
+h1,h2,h3{margin:0;font-weight:600}
+button{font:inherit;cursor:pointer}
+/* `input[type=date]` has to be listed too, or the calendar is the one control
+   on the page that keeps the browser's default chrome. `color-scheme` above is
+   what makes the native picker itself render dark. */
+select,input[type=text],input[type=date]{font:inherit;padding:4px 6px;
+  border:1px solid var(--line);border-radius:6px;background:var(--field-bg);
+  color:var(--ink);max-width:100%}
+
+/* A 3px brand rule across the top: enough to place the tool inside the firm
+   without dressing the whole UI in a logo. The three brand blues in order. */
+.brandbar{height:3px;background:linear-gradient(90deg,
+  var(--brand-1) 0%, var(--brand-2) 45%, var(--brand-3) 75%, var(--brand-4) 100%)}
+header{background:var(--panel);border-bottom:1px solid var(--line);
+  padding:10px 18px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.brand{font-weight:600}
+.brand .firm{color:var(--accent)}
+.theme{display:flex;align-items:center;gap:6px;padding:6px 10px}
+.theme .dot{width:11px;height:11px;border-radius:50%;border:1px solid var(--line-strong);
+  background:linear-gradient(90deg,var(--panel) 50%,var(--ink) 50%)}
+.brand small{display:block;font-weight:400;color:var(--muted);font-size:12px}
+.tabs{display:flex;gap:2px;margin-left:8px}
+.tabs button{background:none;border:1px solid transparent;padding:6px 14px;
+  border-radius:6px;color:var(--muted)}
+.tabs button.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.spacer{flex:1}
+.btn{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px 12px}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.primary:hover{color:var(--accent-ink);opacity:.9}
+.mock{background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn-line);
+  padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600}
+.mock.real{background:var(--ok-soft);color:var(--ok);border-color:var(--ok-line)}
+
+main{padding:16px 18px 30vh}
+.screen{display:none}
+.screen.on{display:block}
+
+.cols{display:grid;grid-template-columns:290px 1fr;gap:16px;align-items:start}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius)}
+.panel>h2{padding:11px 14px;border-bottom:1px solid var(--line);font-size:13px;
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.panel>h2 .count{color:var(--muted);font-weight:400}
+.panel>h2 .hint{margin-left:auto;font-weight:400;color:var(--muted);font-size:12px}
+.pad{padding:12px 14px}
+
+.thumb{display:block;border:1px solid var(--line);border-radius:4px;
+  background:var(--thumb-bg)}
+/* The fills live here, not on the elements. `var()` is only resolved in CSS
+   declarations - in an SVG *presentation attribute* it is invalid and silently
+   ignored, which paints every shape the default black. That is what broke the
+   thumbnails when the palette was tokenised. */
+.thumb .sl-bg{fill:var(--thumb-bg)}
+.thumb .sl-band{fill:var(--thumb-band)}
+.thumb .sl-title{fill:var(--accent)}
+.thumb .sl-line{fill:var(--thumb-line)}
+.thumb .sl-ph{fill:var(--thumb-ph)}
+.thumb.sm{width:100px;min-width:100px}
+.thumb.xs{width:70px;min-width:70px}
+.thumb.lg{width:100%}
+
+.pool{max-height:56vh;overflow:auto;padding:10px 12px;display:flex;
+  flex-direction:column;gap:8px}
+.pool-item{border:1px solid var(--line);border-radius:6px;padding:8px;
+  display:flex;gap:9px;align-items:center;cursor:grab;background:var(--panel)}
+.pool-item:hover{border-color:var(--accent);background:var(--accent-soft)}
+.pool-item .meta{min-width:0;flex:1}
+.pool-item .id{font-family:var(--mono);font-size:11px;color:var(--muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pool-item .t{font-size:12.5px;font-weight:500;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.add{border:1px solid var(--line);background:var(--panel);border-radius:5px;
+  width:24px;min-width:24px;height:24px;line-height:1;color:var(--accent)}
+
+.deck{padding:8px 10px;min-height:120px}
+.row{display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:6px;
+  border:1px solid transparent}
+.row:hover{background:var(--hover);border-color:var(--line)}
+.row.drop-before{box-shadow:inset 0 2px 0 var(--accent)}
+.row.excluded{opacity:.42}
+.row.excluded .thumb{filter:grayscale(1)}
+.grip{color:var(--off-soft);cursor:grab;user-select:none;letter-spacing:-1px}
+.num{width:22px;text-align:right;color:var(--muted);font-size:12px;
+  font-variant-numeric:tabular-nums}
+.namecell{min-width:0;width:34%}
+.namecell .t{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.namecell .id{font-family:var(--mono);font-size:11px;color:var(--muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* the condition has to hold an 88-character form question, so it gets the
+   remaining width and truncates from the middle of the label, never the value */
+.chip{border:1px solid var(--line);background:var(--panel);border-radius:20px;
+  padding:4px 12px;font-size:12px;color:var(--muted);flex:1;min-width:0;
+  text-align:left;display:flex;align-items:baseline;gap:6px;overflow:hidden}
+.chip .lab{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:1}
+.chip .op{color:var(--off);flex-shrink:0}
+.chip .val{font-weight:600;white-space:nowrap;flex-shrink:0}
+.chip.cond{background:var(--accent-soft);border-color:var(--accent-line);color:var(--accent)}
+.chip.cond .op{color:var(--accent-dim)}
+.chip:hover{border-color:var(--accent)}
+.del{border:none;background:none;color:var(--off-soft);font-size:16px;line-height:1}
+.del:hover{color:var(--bad)}
+.status{font-size:11px;width:62px;text-align:right;color:var(--off);flex-shrink:0}
+
+.editor{margin:2px 8px 10px 60px;background:var(--panel-2);border:1px solid var(--line);
+  border-left:3px solid var(--accent);border-radius:6px;padding:12px 14px}
+.editor .line{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.editor .full{font-family:var(--mono);font-size:11.5px;color:var(--muted);
+  background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:5px 8px;
+  word-break:break-all;margin-bottom:8px}
+.editor .note{color:var(--muted);font-size:12px}
+.editor .note.warn{color:var(--warn)}
+.editor .acts{margin-top:11px;display:flex;gap:8px}
+.editor input[type=text]{min-width:230px}
+
+.testbar{position:fixed;left:0;right:0;bottom:0;background:var(--panel);
+  border-top:1px solid var(--line);box-shadow:0 -1px 6px var(--shadow-up);
+  display:flex;flex-direction:column;max-height:34vh}
+.testbar .head{padding:6px 18px;display:flex;align-items:center;gap:14px}
+.testbar.open .head{border-bottom:1px solid var(--line)}
+.toggle{background:none;border:1px solid var(--line);border-radius:6px;
+  padding:4px 11px;font-size:12px;font-weight:600;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.04em;display:flex;align-items:center;gap:7px}
+.toggle:hover{border-color:var(--accent);color:var(--accent)}
+.toggle .caret{display:inline-block;font-size:9px;transition:transform .15s}
+.testbar.open .toggle{background:var(--accent-soft);border-color:var(--accent-line);color:var(--accent)}
+.testbar.open .toggle .caret{transform:rotate(180deg)}
+.badge{background:var(--accent-soft);color:var(--accent);border-radius:20px;
+  padding:0 7px;font-size:11px}
+.testbar.open .badge{background:var(--panel)}
+.preset{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.testbar .body{padding:10px 18px 12px;display:flex;gap:8px 16px;flex-wrap:wrap;
+  overflow:auto}
+.ans{font-size:12px;display:flex;flex-direction:column;gap:2px;max-width:250px}
+.ans .n{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ans.bool{flex-direction:row;align-items:center;gap:5px;max-width:none}
+.tally{margin-left:auto;font-size:13px}
+.tally b{font-size:16px}
+
+/* ------------------------------------------------------------- upload */
+.dropzone{border:2px dashed var(--line-strong);border-radius:10px;padding:26px 20px;
+  text-align:center;background:var(--panel-2)}
+.dropzone.over{border-color:var(--accent);background:var(--accent-soft)}
+.dz-icon{font-size:26px;color:var(--accent);line-height:1}
+.dz-main{font-size:15px;margin-top:6px}
+.dz-sub{font-size:12.5px;color:var(--muted);margin-top:7px}
+.current{margin-top:12px;display:flex;align-items:center;gap:10px;font-size:13px;
+  border:1px solid var(--line);border-radius:6px;padding:9px 12px;background:var(--panel)}
+.current .f{font-family:var(--mono);font-size:12.5px}
+.current .m{color:var(--muted);font-size:12px}
+.current .sp{flex:1}
+.stats{display:flex;flex-wrap:wrap;gap:0;padding:4px 0}
+.stat{padding:11px 18px;border-right:1px solid var(--line);min-width:118px}
+.stat:last-child{border-right:none}
+.stat b{display:block;font-size:21px;line-height:1.2;font-variant-numeric:tabular-nums}
+.stat span{font-size:11.5px;color:var(--muted)}
+.stat.warn b{color:var(--warn)} .stat.bad b{color:var(--bad)} .stat.ok b{color:var(--ok)}
+.empty main .panel:not(#drop-panel){display:none}
+
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));
+  gap:13px;padding:14px}
+.card{border:1px solid var(--line);border-radius:6px;padding:9px;background:var(--panel)}
+.card .t{font-size:12.5px;font-weight:500;margin-top:7px}
+.card .id{font-family:var(--mono);font-size:11px;color:var(--muted);
+  word-break:break-all}
+.tags{margin-top:6px;display:flex;flex-wrap:wrap;gap:4px}
+.tag{font-size:10.5px;padding:1px 6px;border-radius:20px;background:var(--chip-bg);color:var(--muted)}
+.tag.ph{background:var(--accent-soft);color:var(--accent);font-family:var(--mono)}
+.tag.w{background:var(--warn-soft);color:var(--warn)}
+.tag.b{background:var(--bad-soft);color:var(--bad)}
+.notice{margin:0 14px 14px;padding:10px 13px;border-radius:6px;font-size:13px}
+.notice.warn{background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn-line)}
+.notice.bad{background:var(--bad-soft);color:var(--bad);border:1px solid var(--bad-line)}
+.notice.ok{background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok-line)}
+.notice b{display:block;margin-bottom:2px}
+
+/* ----------------------------------------------------------- libraries */
+.libpick{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:7px}
+.libpick select{font-weight:600;color:var(--ink);max-width:250px}
+.libmeta{color:var(--off);white-space:nowrap}
+.tabsplit{width:1px;height:20px;background:var(--line);margin:0 6px}
+.role{font-size:10px;text-transform:uppercase;letter-spacing:.07em;
+  color:var(--off);align-self:center;margin-right:2px}
+.naming{margin-top:13px;display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end}
+.fld{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--muted)}
+.fld.wide{flex:1;min-width:240px}
+.fld.wide input{width:100%}
+.fld input,.fld select{color:var(--ink)}
+.fld-note{font-size:12px;color:var(--muted);flex-basis:100%}
+.fld-note.warn{color:var(--warn)}
+
+/* ---------------------------------------------------------------- build */
+.cols.build{grid-template-columns:1fr 1fr}
+.tabrow{display:flex;gap:2px;padding:9px 14px 0}
+.seg-btn{background:none;border:1px solid transparent;border-bottom:2px solid transparent;
+  padding:6px 12px;color:var(--muted);font-size:13px}
+.seg-btn.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+.formgrid{display:flex;flex-direction:column;gap:11px;max-height:60vh;overflow:auto}
+.q{display:flex;flex-direction:column;gap:4px}
+.q .qt{font-size:12.5px}
+.q.bool{flex-direction:row;align-items:center;gap:8px}
+.q input[type=text],.q input[type=date],.q select{width:100%}
+.q.bool input{width:auto}
+.buildlist{padding:10px 14px;max-height:56vh;overflow:auto;display:flex;
+  flex-direction:column;gap:5px}
+.bl{display:flex;gap:9px;align-items:center;font-size:12.5px}
+.bl .n{width:22px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+.bl .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.buildfoot{border-top:1px solid var(--line);padding:12px 14px;display:flex;
+  gap:10px;align-items:center;flex-wrap:wrap}
+
+/* -------------------------------------------------------------- check */
+.pair{display:grid;grid-template-columns:1fr auto 1fr;gap:14px;align-items:center}
+.vs{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+.slot-lab{font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px;
+  text-transform:uppercase;letter-spacing:.04em}
+.dropzone.sm{padding:16px 14px}
+.dropzone.sm .dz-main{font-size:13.5px}
+.btn.linky{border:none;background:none;color:var(--accent);padding:0;
+  text-decoration:underline}
+.pair-acts{margin-top:13px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.or{color:var(--muted);font-size:12px}
+.hint2{margin-left:auto;font-size:12px;color:var(--muted);display:flex;
+  align-items:center;gap:6px}
+
+.verdict{padding:14px 16px;display:flex;align-items:center;gap:13px;
+  border-bottom:1px solid var(--line);flex-wrap:wrap}
+.verdict .big{font-size:16px;font-weight:600}
+.verdict.ok{background:var(--ok-soft);color:var(--ok)}
+.verdict.warn{background:var(--warn-soft);color:var(--warn)}
+.verdict.bad{background:var(--bad-soft);color:var(--bad)}
+.verdict .files{margin-left:auto;font-size:12px;font-family:var(--mono);opacity:.8}
+
+.finding{border-bottom:1px solid var(--line);padding:12px 16px}
+.finding:last-child{border-bottom:none}
+.finding h3{font-size:12.5px;margin-bottom:8px;display:flex;gap:8px;
+  align-items:center}
+.finding h3 .n{background:var(--chip-bg);color:var(--muted);border-radius:20px;
+  padding:1px 8px;font-size:11px;font-weight:600}
+.finding .why{color:var(--muted);font-size:12.5px;font-weight:400;margin-left:2px}
+.dl{display:flex;flex-direction:column;gap:6px}
+.di{display:flex;gap:10px;align-items:baseline;font-size:12.5px;
+  border:1px solid var(--line);border-radius:6px;padding:7px 10px;
+  background:var(--panel-2)}
+.di .k{font-family:var(--mono);font-size:11.5px;color:var(--muted);
+  white-space:nowrap}
+.di .b{font-weight:600;white-space:nowrap}
+.di .p{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:5px}
+.seg div{font-size:12.5px;padding:5px 9px;border-radius:5px}
+.seg .mine{background:var(--bad-soft);color:var(--bad)}
+.seg .theirs{background:var(--ok-soft);color:var(--ok)}
+.foot{padding:12px 16px;color:var(--muted);font-size:12.5px;
+  border-top:1px solid var(--line)}
+
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:9px 14px;border-bottom:1px solid var(--line);
+  vertical-align:middle}
+th{font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);
+  font-weight:600}
+td.ph{font-family:var(--mono);font-size:12.5px;white-space:nowrap}
+td.used{color:var(--muted);font-size:12.5px;white-space:nowrap}
+.pill{font-size:11px;padding:2px 8px;border-radius:20px}
+.pill.bad{background:var(--bad-soft);color:var(--bad)}
+.pill.warn{background:var(--warn-soft);color:var(--warn)}
+.pill.ok{background:var(--ok-soft);color:var(--ok)}
+.preview{color:var(--muted);font-size:12.5px;font-style:italic}

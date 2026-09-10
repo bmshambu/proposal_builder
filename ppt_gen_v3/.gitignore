@@ -1,0 +1,7 @@
+﻿# generated / local state - never commit templates, decks or payloads
+data/builds/
+data/payloads/
+templates/*/
+!templates/demo/
+*.bak
+__pycache__/

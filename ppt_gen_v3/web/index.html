@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Proposal builder</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+
+<div class="brandbar"></div>
+<header>
+  <div class="brand"><span class="firm" id="firm"></span>Proposal builder</div>
+
+  <!-- Every screen is scoped to one library. It sits in the header rather
+       than on each screen because it is context, not a setting: the answer to
+       "which library am I editing" must never be more than a glance away. -->
+  <label class="libpick">Library
+    <select id="library"></select>
+    <span class="libmeta" id="hdr-count"></span></label>
+
+  <nav class="tabs">
+    <span class="role">author</span>
+    <button data-tab="library" class="on">1 &middot; Library</button>
+    <button data-tab="rules">2 &middot; Rules</button>
+    <button data-tab="mapping">3 &middot; Mapping</button>
+    <button data-tab="check">4 &middot; Check</button>
+    <span class="tabsplit"></span>
+    <span class="role">anyone</span>
+    <button data-tab="build">Build a deck</button>
+  </nav>
+  <span class="spacer"></span>
+  <button class="btn theme" id="theme-btn" title="Light / dark / follow the system">
+    <span class="dot"></span><span id="theme-label">System</span></button>
+  <span class="mock" id="source-badge">MOCKUP</span>
+  <button class="btn" data-goto="check">Check against Templafy</button>
+  <button class="btn primary">Save rules</button>
+</header>
+
+<main>
+
+<section class="screen on" id="screen-library">
+
+  <!-- step 1: the author brings a deck. Nothing else on this screen exists
+       until they do, which is why the empty state is the whole screen. -->
+  <div class="panel" id="drop-panel">
+    <h2>Library <span class="hint" id="drop-hint"></span></h2>
+    <div class="pad">
+      <div class="dropzone" id="dropzone">
+        <div class="dz-icon">&#8681;</div>
+        <div class="dz-main">Drop a <b>.pptx</b> here to add a library</div>
+        <div class="dz-sub">or <button class="btn linky" id="choose">choose a file</button>
+          &mdash; the deck is copied verbatim and inspected; nothing in it is
+          modified</div>
+      </div>
+
+      <!-- The name is asked for at import, not derived from the filename.
+           It becomes the folder under templates/ and the id every rule,
+           binding and build refers to, so it is not a label that can be
+           tidied up later. -->
+      <div class="naming">
+        <label class="fld"><span>Save this library as</span>
+          <input type="text" id="lib-name" value="public_audit"
+                 placeholder="short_name_no_spaces"></label>
+        <label class="fld wide"><span>Description</span>
+          <input type="text" id="lib-desc"
+                 value="The live template, harvested from 70 decks"></label>
+        <div class="fld-note" id="name-note"></div>
+      </div>
+      <div class="current" id="current"></div>
+    </div>
+  </div>
+
+  <!-- step 1b: what the inspection found. This is the author's first real
+       decision point, so the counts come before the thumbnails. -->
+  <div class="panel" id="inspect-panel">
+    <h2>What the inspection found
+      <span class="hint">engine/library.py &middot; ids, placeholders and anything
+        that will bite later</span></h2>
+    <div class="stats" id="stats"></div>
+    <div class="notice bad" id="lib-bad"></div>
+    <div class="notice warn" id="lib-warn"></div>
+    <div class="notice ok" id="lib-ok"></div>
+  </div>
+
+  <div class="panel" id="sheet-panel">
+    <h2>Every slide in the library <span class="count" id="lib-count"></span>
+      <span class="hint">thumbnails rendered in-process by engine/svg.py - no PowerPoint, no LibreOffice</span></h2>
+    <div class="grid" id="lib-grid"></div>
+  </div>
+</section>
+
+<section class="screen" id="screen-rules">
+  <div class="cols">
+    <div class="panel">
+      <h2>Not in the deck <span class="count" id="pool-count"></span></h2>
+      <div class="pad" style="padding-bottom:0">
+        <input type="text" id="pool-search" placeholder="Filter slides..." style="width:100%">
+      </div>
+      <div class="pool" id="pool"></div>
+    </div>
+    <div class="panel">
+      <h2>Deck order <span class="count" id="deck-count"></span>
+        <span class="hint">drag to reorder &middot; click a condition to edit it</span></h2>
+      <div class="deck" id="deck"></div>
+    </div>
+  </div>
+</section>
+
+<section class="screen" id="screen-mapping">
+  <div class="panel">
+    <h2>Placeholders in the library <span class="count" id="map-count"></span>
+      <span class="hint">the field list comes from the payloads - nothing is typed by hand</span></h2>
+    <div class="notice ok" id="map-note"></div>
+    <table>
+      <thead><tr><th>Placeholder</th><th>Used on</th><th>Comes from</th>
+        <th>Renders as</th><th></th></tr></thead>
+      <tbody id="map-body"></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============================================================== CHECK
+     v1's diff, given a screen. Two decks in, one verdict out. This is the
+     only objective answer available once rules are authored by hand rather
+     than inferred, so it gets a screen rather than a log line. -->
+<section class="screen" id="screen-check">
+
+  <div class="panel">
+    <h2>Compare two decks
+      <span class="hint">nothing is uploaded anywhere - both files are read on
+        this machine</span></h2>
+    <div class="pad">
+      <div class="pair">
+        <div class="slot" data-slot="ours">
+          <div class="slot-lab">Our deck</div>
+          <div class="dropzone sm"><div class="dz-icon">&#8681;</div>
+            <div class="dz-main">Drop the deck this tool built</div>
+            <div class="dz-sub">or <button class="btn linky">choose a file</button></div>
+          </div>
+        </div>
+        <div class="vs">vs</div>
+        <div class="slot" data-slot="templafy">
+          <div class="slot-lab">Templafy's deck</div>
+          <div class="dropzone sm"><div class="dz-icon">&#8681;</div>
+            <div class="dz-main">Drop the deck Templafy generated</div>
+            <div class="dz-sub">or <button class="btn linky">choose a file</button></div>
+          </div>
+        </div>
+      </div>
+      <div class="pair-acts">
+        <button class="btn primary" id="run-check">Compare</button>
+        <span class="or">or</span>
+        <button class="btn">Run the whole set &mdash; every payload and its deck</button>
+        <span class="hint2" id="sample-wrap">showing a sample result:
+          <select id="sample"></select></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" id="check-result"></div>
+</section>
+
+<!-- ============================================================== BUILD
+     The only screen someone who is not an author ever opens. Different job,
+     so a different shape: no library internals, no block ids, no rules -
+     answer the questions, see what you will get, take the deck. -->
+<section class="screen" id="screen-build">
+  <div class="cols build">
+
+    <div class="panel">
+      <h2>Answers <span class="hint" id="build-src"></span></h2>
+      <div class="tabrow">
+        <button class="seg-btn on" data-answers="form">Fill the form</button>
+        <button class="seg-btn" data-answers="upload">Upload a payload</button>
+      </div>
+
+      <div class="pad" id="answers-form"></div>
+
+      <div class="pad" id="answers-upload" hidden>
+        <div class="dropzone sm"><div class="dz-icon">&#8681;</div>
+          <div class="dz-main">Drop a payload <b>.json</b></div>
+          <div class="dz-sub">the same file Templafy would have been given</div>
+        </div>
+        <div class="fld-note" style="margin-top:10px">Uploading fills the form
+          rather than bypassing it, so the answers stay visible and can be
+          corrected before building.</div>
+        <div style="margin-top:10px">
+          <label class="fld"><span>or load one we already have</span>
+            <select id="build-preset"></select></label>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>What you will get <span class="count" id="build-count"></span>
+        <span class="hint">recalculated as you answer</span></h2>
+      <div class="notice bad" id="build-warn"></div>
+      <div class="buildlist" id="build-list"></div>
+      <div class="buildfoot">
+        <button class="btn primary" id="build-go">Build the deck</button>
+        <button class="btn" id="build-dl" disabled>Download .pptx</button>
+        <span class="fld-note" id="build-status">nothing built yet</span>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+</main>
+
+<!-- Collapsed by default: the slides are what an author is judging, and an
+     always-open answer panel takes a quarter of the screen away from them.
+     The tally stays visible collapsed, so the deck size is never hidden. -->
+<div class="testbar" id="testbar">
+  <div class="head">
+    <button class="toggle" id="inputs-toggle" aria-expanded="false">
+      <span class="caret">&#9650;</span> Inputs <span class="badge" id="inputs-n"></span>
+    </button>
+    <label class="preset" id="preset-wrap">Load answers
+      <select id="preset"></select></label>
+    <span style="font-size:12px;color:var(--muted)" id="test-hint"></span>
+    <span class="tally"><b id="tally">0</b> slides in this deck
+      <span style="color:var(--muted)" id="tally-off"></span></span>
+  </div>
+  <div class="body" id="test-body" hidden></div>
+</div>
+
+<!-- Real fields and values, if tools/make_ui_catalogue.py has been run.
+     The file is gitignored: the payloads it is built from are confidential.
+     Absent, the synthetic fallback below is used and the page still opens. -->
+
+<!-- Real verify.compare() output from the synthetic demo template. Committed,
+     unlike the catalogue: nothing in the demo is confidential, and it keeps
+     the Check screen honest about what the engine actually returns. -->
+
+<script src="app.js"></script>
+</body>
+</html>
