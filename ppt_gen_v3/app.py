@@ -395,19 +395,64 @@ def get_libraries():
     return [describe(t) for t in list_templates(TEMPLATES)]
 
 
+def library_pdf_path(tpl: Template) -> str:
+    return os.path.join(tpl.folder, "library.pdf")
+
+
+def attach_pdf(tpl: Template, source: Optional[str]) -> dict:
+    """Give a library the PDF its previews are cut from. -> a status dict.
+
+    The PDF is made outside this app, by `tools/make_library_pdf.py`, and
+    uploaded alongside the .pptx. Deliberately not generated here: converting
+    needs PowerPoint, and the whole point of the library PDF is that the
+    deployed app never needs a converter. Wiring one into import would put the
+    dependency straight back.
+
+    A library without a PDF still imports. Previews fall back and the screen
+    says why, rather than an import failing over a preview.
+    """
+    if source is None:
+        return {"pdf": False,
+                "why": "no PDF was uploaded — previews will fall back. Make one "
+                       "with tools/make_library_pdf.py and import again."}
+    target = library_pdf_path(tpl)
+    shutil.copyfile(source, target)
+    with tpl.open_library() as lib:
+        slides = len(lib.ordered())
+
+    ok, why = rendermod.check_pdf(target, slides)
+    if not ok:
+        # A mismatched PDF is worse than none: page N would be a different slide
+        # and the preview would be confidently wrong. Refuse and say so.
+        try:
+            os.remove(target)
+        except OSError:
+            pass
+        return {"pdf": False, "why": why}
+    return {"pdf": True, "pages": slides}
+
+
 @app.post("/api/libraries", tags=["libraries"])
 async def post_library(
     file: UploadFile = File(..., description="the .pptx to import"),
     name: str = Form(..., description="becomes the folder under templates/"),
     description: str = Form(""),
     overwrite: bool = Form(False),
+    pdf: Optional[UploadFile] = File(
+        None, description="a PDF of the same deck, one page per slide"),
 ):
-    """Import a .pptx as a library.
+    """Import a .pptx as a library, and the PDF its previews are cut from.
 
     The name is given, never derived from the filename: it becomes the folder
     and the id every rule and binding refers to, so it is not a label that can
     be tidied up later. Importing over an existing name replaces that library
     *including its rules*, which is why `overwrite` has to be asked for.
+
+    The PDF is what makes previews work anywhere. A deck is assembled by copying
+    slides out of the library, so a preview is assembled by copying pages out of
+    a PDF of that same library — no converter needed at render time, on any
+    platform. Upload one, or let PowerPoint make it here if this machine has it.
+    Page N must be slide N; the pairing is checked before it is kept.
     """
     if not NAME_RE.fullmatch(name or ""):
         raise HTTPException(400, "name must be lower case letters, digits and "
@@ -415,9 +460,12 @@ async def post_library(
     tmpdir = tempfile.mkdtemp(prefix="pptgen3_import_")
     try:
         path = await take_upload(file, ".pptx", tmpdir)
+        pdf_path = await take_upload(pdf, ".pdf", tmpdir) if pdf else None
         with WRITE_LOCK:
             report = import_deck(path, TEMPLATES, name=name,
                                  description=description, overwrite=overwrite)
+            tpl = find_template(TEMPLATES, name)
+            report["preview"] = attach_pdf(tpl, pdf_path)
     except TemplateError as exc:
         # The engine names the file it was handed, which here is a temp path
         # nobody asked about. Say the name they uploaded instead - an error
@@ -425,7 +473,7 @@ async def post_library(
         raise HTTPException(409, str(exc).replace(path, file.filename or "the file"))
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
-    return {"imported": report, "inspect": inspect(find_template(TEMPLATES, name))}
+    return {"imported": report, "inspect": inspect(tpl)}
 
 
 @app.get("/api/libraries/{lib}", tags=["libraries"])
@@ -563,6 +611,28 @@ def post_build(body: Answers, tpl: Template = Depends(library)):
     sel = selection(tpl, body.answers)
     token = os.urandom(8).hex()
     build_template(tpl, body.answers, os.path.join(BUILDS, token + ".pptx"))
+
+    # Which library pages this deck is made of, recorded now.
+    #
+    # The viewer cannot work this out later: once placeholders are filled, a
+    # block named after its title has a different id in the output - `cover`
+    # becomes `northwind_manufacturing_plc` - so reading the built file back
+    # does not lead anywhere. The selection is the mapping, and this is the
+    # moment we have it.
+    with tpl.open_library() as lib:
+        pages, titles = [], []
+        for row in sel["slides"]:
+            try:
+                block = lib.block(row["slide"])
+            except Exception:
+                pages, titles = [], []
+                break
+            pages.append(block.index)
+            titles.append(row.get("title") or block.title)
+    with open(os.path.join(BUILDS, token + ".json"), "w", encoding="utf-8") as fh:
+        json.dump({"lib": os.path.basename(tpl.folder), "pages": pages,
+                   "titles": titles}, fh)
+
     return {"token": token, "slides": sel["count"], "unbound": sel["unbound"],
             "empty": sel["empty"],
             "download": "/download/%s" % token,
@@ -576,6 +646,34 @@ def build_path(token: str) -> str:
     if not os.path.exists(path):
         raise HTTPException(404, "that build is gone")
     return path
+
+
+def build_pages(token: str):
+    """What `post_build` recorded about this deck.
+
+    -> (library pdf path, [page index], [title], why not). The last one is a
+    sentence when this build cannot be previewed from library pages, so the
+    caller can fall back and say what happened.
+    """
+    try:
+        with open(os.path.join(BUILDS, token + ".json"), encoding="utf-8") as fh:
+            note = json.load(fh)
+    except (OSError, ValueError):
+        return None, [], [], ("this deck was built before previews were kept — "
+                              "build it again")
+    pages = note.get("pages") or []
+    if not pages:
+        return None, [], [], ("the slides in this deck could not be traced back "
+                              "to library pages")
+    try:
+        tpl = find_template(TEMPLATES, note.get("lib") or "")
+    except TemplateError:
+        return None, [], [], "the library this was built from is gone"
+    pdf = library_pdf_path(tpl)
+    if not os.path.exists(pdf):
+        return None, [], [], ("%s has no PDF to preview from — re-import it with "
+                              "one" % tpl.name)
+    return pdf, pages, note.get("titles") or [], None
 
 
 def slide_titles(path: str) -> List[str]:
@@ -601,9 +699,27 @@ def slides_as_svg(path: str) -> List[dict]:
     return out
 
 
+@app.get("/api/renderers", tags=["build"])
+def get_renderers():
+    """Which renderers this machine can use, and what is missing for the rest.
+
+    Worth an endpoint because the answer differs between a laptop and the
+    deployment, and "why does the preview look different in Azure" is a question
+    better answered before someone asks it.
+    """
+    lib_ok, _why = rendermod.probe("library")
+    fallback = rendermod.chosen()[0]
+    return {"using": "library" if lib_ok else fallback,
+            "fallback": fallback,
+            "note": ("`library` needs the library to have been imported with its "
+                     "PDF; `fallback` is what a build without one gets."),
+            "engines": rendermod.engines()}
+
+
 @app.get("/api/builds/{token}/slides", tags=["build"])
 def build_slides(token: str,
-                 engine: str = Query("auto", pattern="^(auto|powerpoint|svg)$")):
+                 engine: str = Query(
+                     "auto", pattern="^(auto|library|libreoffice|powerpoint|svg)$")):
     """The built deck, slide by slide — the real thing where we can get it.
 
     It shows the deck *after* selection and after every placeholder was filled,
@@ -611,40 +727,61 @@ def build_slides(token: str,
     PowerPoint to find a stray `{{...}}` is a slow way to learn something the
     screen can say.
 
-    Two renderers, and the answer says which one drew it:
+    Three renderers, and the answer says which one drew it:
 
-      **powerpoint** — the slides exported by PowerPoint itself. Exact, because
-      it *is* PowerPoint: real fonts, real wrapping, charts and SmartArt.
+      **libreoffice** — converted to PDF and rasterised. The default, and the
+      one that will still be there in a Linux container.
+
+      **powerpoint** — exported by PowerPoint itself. Exact, and local only:
+      Azure has no desktop session to run it in.
 
       **svg** — `engine/svg.py`, in-process and always available. An honest
       approximation, and on a template that leans on inherited styling it can
       look like a skeleton of the deck. Good enough to answer "which slide is
       this"; not good enough to answer "is this what the client sees".
 
-    `engine=powerpoint` refuses rather than quietly falling back, so a caller
-    that needs fidelity can tell the difference.
+    Naming one refuses rather than quietly falling back, so a caller that needs
+    a particular renderer — to compare two, say — can tell the difference.
     """
     path = build_path(token)
 
     why = None
-    if engine in ("auto", "powerpoint"):
-        ok, why = rendermod.available()
-        if ok:
-            try:
-                pngs = rendermod.deck_to_images(path, os.path.join(RENDERS, token))
-                titles = slide_titles(path)
-                return {"engine": "powerpoint", "why": None, "slides": [
-                    {"index": i, "title": titles[i - 1] if i <= len(titles) else "",
-                     "png": "/api/builds/%s/png/%d" % (token, i),
-                     "svg": None, "unsupported": [], "error": None}
-                    for i in range(1, len(pngs) + 1)]}
-            except Exception as exc:
-                # Anything at all: a preview that 500s is worse than a preview
-                # that admits it is an approximation.
-                why = str(exc) if isinstance(exc, rendermod.RenderError) \
-                    else "%s: %s" % (type(exc).__name__, exc)
-        if engine == "powerpoint":
-            raise HTTPException(503, why or "PowerPoint is not available here")
+    if engine in ("auto", "library"):
+        name, pages, titles, missing = build_pages(token)
+        try:
+            if missing:
+                raise rendermod.RenderError(missing)
+            _e, pngs = rendermod.preview_from_library(
+                name, pages, os.path.join(RENDERS, token))
+            return {"engine": "library", "why": None, "slides": [
+                {"index": i, "title": titles[i - 1] if i <= len(titles) else "",
+                 "png": "/api/builds/%s/png/%d" % (token, i),
+                 "svg": None, "unsupported": [], "error": None}
+                for i in range(1, len(pngs) + 1)]}
+        except Exception as exc:
+            why = str(exc) if isinstance(exc, rendermod.RenderError) \
+                else "%s: %s" % (type(exc).__name__, exc)
+        if engine == "library":
+            raise HTTPException(503, why)
+
+    if engine != "svg":
+        try:
+            name, pngs = rendermod.deck_to_images(
+                path, os.path.join(RENDERS, token),
+                backend=None if engine == "auto" else engine)
+            titles = slide_titles(path)
+            return {"engine": name, "why": None, "slides": [
+                {"index": i, "title": titles[i - 1] if i <= len(titles) else "",
+                 "png": "/api/builds/%s/png/%d" % (token, i),
+                 "svg": None, "unsupported": [], "error": None}
+                for i in range(1, len(pngs) + 1)]}
+        except Exception as exc:
+            # Anything at all: a preview that 500s is worse than a preview that
+            # admits it is an approximation.
+            why = str(exc) if isinstance(exc, rendermod.RenderError) \
+                else "%s: %s" % (type(exc).__name__, exc)
+        if engine != "auto":
+            raise HTTPException(503, why or "%s is not available here" % engine)
 
     return {"engine": "svg", "why": why, "slides": slides_as_svg(path)}
 

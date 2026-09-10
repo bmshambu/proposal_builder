@@ -55,11 +55,19 @@
     <div class="pad">
       <div class="dropzone" id="dropzone">
         <div class="dz-icon">&#8681;</div>
-        <div class="dz-main">Drop a <b>.pptx</b> here to add a library</div>
-        <div class="dz-sub">or <button class="btn linky" id="choose">choose a file</button>
+        <div class="dz-main">Drop the <b>.pptx</b> and its <b>.pdf</b> here</div>
+        <div class="dz-sub">or <button class="btn linky" id="choose">choose files</button>
           &mdash; the deck is copied verbatim and inspected; nothing in it is
           modified</div>
       </div>
+
+      <!-- The PDF is what the deck viewer previews from. A deck is assembled by
+           copying slides out of the library, so its preview is assembled by
+           copying pages out of a PDF of that same library - which means nothing
+           has to convert anything at render time, on any platform. Made once by
+           tools/make_library_pdf.py, not here: converting needs PowerPoint, and
+           the point of the PDF is that the deployed app never does. -->
+      <div class="staged" id="staged"></div>
 
       <!-- The name is asked for at import, not derived from the filename.
            It becomes the folder under templates/ and the id every rule,
@@ -305,6 +313,7 @@
       <button class="nav" id="viewer-next" title="Next slide">&#8250;</button>
     </div>
     <div class="filmstrip" id="viewer-strip"></div>
+    <p class="viewer-note" id="viewer-note" hidden></p>
   </div>
 </section>
 

@@ -14,6 +14,7 @@ import base64
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 
@@ -197,29 +198,68 @@ def main():
           "first slide reads %r" % (slides[0]["title"][:38] if slides else ""))
 
     from engine import render as rendermod
-    can_ppt, why = rendermod.available()
+    # The library backend is the one that deploys: previews are pages copied out
+    # of a PDF of the library, so nothing converts anything at render time. It
+    # wins over the converters whenever the library has a PDF.
     auto = client.get("/api/builds/%s/slides" % built["token"]).json()
     check("the viewer is told which renderer drew the deck",
-          auto["engine"] == ("powerpoint" if can_ppt else "svg"),
-          "%s%s" % (auto["engine"], "" if can_ppt else " - %s" % why))
-    if can_ppt:
-        check("PowerPoint exported every slide",
-              len(auto["slides"]) == built["slides"]
-              and all(s["png"] and not s["svg"] for s in auto["slides"]),
-              "%d image(s)" % len(auto["slides"]))
-        img = client.get(auto["slides"][0]["png"])
-        check("GET /builds/{token}/png/{n}",
-              img.status_code == 200 and img.content[1:4] == b"PNG",
-              "%d bytes, a real png" % len(img.content))
-        check("a slide nobody exported is 404",
-              client.get("/api/builds/%s/png/999" % built["token"]).status_code
-              == 404)
-    else:
-        # Refusing beats pretending: a caller that needs fidelity must be able
-        # to tell that it did not get it.
-        check("engine=powerpoint refuses rather than falling back",
-              client.get("/api/builds/%s/slides?engine=powerpoint"
-                         % built["token"]).status_code == 503, why)
+          auto["engine"] == "library",
+          "%s%s" % (auto["engine"], "" if not auto.get("why") else
+                    " - %s" % auto["why"]))
+    check("every slide came back as an image",
+          len(auto["slides"]) == built["slides"]
+          and all(s["png"] and not s["svg"] for s in auto["slides"]),
+          "%d image(s)" % len(auto["slides"]))
+    img = client.get(auto["slides"][0]["png"])
+    check("GET /builds/{token}/png/{n}",
+          img.status_code == 200 and img.content[1:4] == b"PNG",
+          "%d bytes, a real png" % len(img.content))
+    check("a slide nobody exported is 404",
+          client.get("/api/builds/%s/png/999" % built["token"]).status_code == 404)
+
+    # The mapping is the whole risk. If page N stops being slide N the preview
+    # is confidently wrong - it shows a real slide from the real library, just
+    # not the one in the deck. So check it against the selection, and then check
+    # the bytes actually served are the bytes of that page.
+    with open(os.path.join(appmod.BUILDS, built["token"] + ".json")) as fh:
+        note = json.load(fh)
+    tpl_demo = appmod.find_template(appmod.TEMPLATES, "demo")
+    picked = client.post("/api/libraries/demo/select",
+                         json={"answers": exp}).json()["slides"]
+    with tpl_demo.open_library() as lib:
+        want = [lib.block(row["slide"]).index for row in picked]
+    check("the build records which library pages it is made of",
+          note["pages"] == want and note["lib"] == "demo",
+          "pages %s" % ", ".join(str(p + 1) for p in note["pages"]))
+
+    served = client.get(auto["slides"][1]["png"]).content
+    one_page = os.path.join(tempfile.mkdtemp(prefix="pptgen3_page_"), "x")
+    _e, direct = rendermod.preview_from_library(
+        os.path.join(tpl_demo.folder, "library.pdf"), [want[1]], one_page)
+    check("preview slide 2 really is the library page the rules chose",
+          served == open(direct[0], "rb").read(),
+          "library page %d, byte for byte" % (want[1] + 1))
+
+    rs = client.get("/api/renderers").json()
+    check("GET /renderers says what this machine can do",
+          {e["engine"] for e in rs["engines"]}
+          == {"library", "libreoffice", "powerpoint", "svg"},
+          ", ".join("%s %s" % (e["engine"], "ok" if e["available"] else "no")
+                    for e in rs["engines"]))
+    for backend in ("libreoffice", "powerpoint"):
+        ok, missing = rendermod.probe(backend)
+        r = client.get("/api/builds/%s/slides?engine=%s"
+                       % (built["token"], backend))
+        if ok:
+            check("engine=%s renders" % backend,
+                  r.status_code == 200 and r.json()["engine"] == backend,
+                  "%d slide(s)" % len(r.json()["slides"]))
+        else:
+            # Refusing beats pretending: a caller that needs fidelity must be
+            # able to tell that it did not get it.
+            check("engine=%s refuses rather than falling back" % backend,
+                  r.status_code == 503, missing)
+
     check("an unknown renderer is refused",
           client.get("/api/builds/%s/slides?engine=magic"
                      % built["token"]).status_code == 422)
@@ -252,6 +292,65 @@ def main():
     check("POST /compare different", not diff["exact"],
           "%s - %d vs %d slides" % (diff["verdict"], diff["our_slides"],
                                     diff["templafy_slides"]))
+
+    # ---------------------------------------------- importing the library PDF
+    #
+    # The PDF is uploaded, never generated here: converting needs PowerPoint,
+    # and the point of the whole design is that the deployed app has none.
+    demo_pptx = open(tpl.library_path, "rb").read()
+    demo_pdf = open(os.path.join(tpl.folder, "library.pdf"), "rb").read()
+
+    def import_with(pdf_bytes, name="demo_pdf"):
+        files = {"file": ("library.pptx", demo_pptx)}
+        if pdf_bytes is not None:
+            files["pdf"] = ("library.pdf", pdf_bytes)
+        return client.post("/api/libraries", files=files,
+                           data={"name": name, "overwrite": "true"})
+
+    r = import_with(demo_pdf)
+    body = r.json().get("imported", {}) if r.status_code == 200 else {}
+    check("import keeps a PDF that matches the deck",
+          r.status_code == 200 and (body.get("preview") or {}).get("pdf"),
+          "%d page(s), one per slide" % (body.get("preview") or {}).get("pages", 0))
+
+    # A PDF with the wrong number of pages is worse than no PDF: page N would be
+    # a different slide and every preview after it would be confidently wrong.
+    short = rendermod.page_count(os.path.join(tpl.folder, "library.pdf"))
+    one = io.BytesIO()
+    import pypdfium2 as _pdfium
+    _doc = _pdfium.PdfDocument.new()
+    _doc.import_pages(_pdfium.PdfDocument(os.path.join(tpl.folder, "library.pdf")),
+                      pages=[0])
+    _doc.save(one)
+    r = import_with(one.getvalue(), name="demo_badpdf")
+    prev = (r.json().get("imported", {}).get("preview") or {})
+    check("a PDF with the wrong page count is refused",
+          r.status_code == 200 and not prev.get("pdf")
+          and "1 page" in (prev.get("why") or ""),
+          (prev.get("why") or "")[:64])
+    check("and the mismatched PDF is not kept",
+          not os.path.exists(os.path.join(appmod.TEMPLATES, "demo_badpdf",
+                                          "library.pdf")),
+          "%d-page PDF against %d slides" % (1, short))
+
+    # No PDF is allowed - the library still imports, previews just fall back.
+    r = import_with(None, name="demo_nopdf")
+    prev = (r.json().get("imported", {}).get("preview") or {})
+    check("a library without a PDF still imports, and says what is missing",
+          r.status_code == 200 and not prev.get("pdf")
+          and "make_library_pdf" in (prev.get("why") or ""),
+          (prev.get("why") or "")[:58])
+    nb = client.post("/api/libraries/demo_nopdf/build", json={"answers": exp})
+    if nb.status_code == 200:
+        r = client.get("/api/builds/%s/slides?engine=library" % nb.json()["token"])
+        check("engine=library refuses when the library has no PDF",
+              r.status_code == 503 and "no PDF" in r.text, "503, and says why")
+        fell = client.get("/api/builds/%s/slides" % nb.json()["token"]).json()
+        check("and auto falls back rather than failing",
+              fell["engine"] != "library" and len(fell["slides"]) > 0,
+              "fell back to %s" % fell["engine"])
+    for gone in ("demo_pdf", "demo_badpdf", "demo_nopdf"):
+        shutil.rmtree(os.path.join(appmod.TEMPLATES, gone), ignore_errors=True)
 
     # ------------------------------------------------------------ refusals
     r = client.post("/api/libraries", files={"file": ("x.pptx", b"PK\x03\x04")},

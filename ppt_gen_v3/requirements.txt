@@ -2,6 +2,12 @@ fastapi>=0.110
 uvicorn[standard]>=0.27
 python-multipart>=0.0.9
 
-# optional: renders the deck viewer through PowerPoint itself.
-# Without it the built-in SVG approximation is used instead.
+# the deck viewer: previews are pages rasterised out of the library PDF.
+# Pure wheels, no system binary, identical on Windows and Linux.
+pypdfium2>=4
+pillow>=10
+
+# optional, Windows only: PowerPoint automation. Needed by
+# tools/make_library_pdf.py and by the exact-render fallback. The deployed app
+# never uses it.
 pywin32>=306; sys_platform == 'win32'

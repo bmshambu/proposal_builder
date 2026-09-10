@@ -417,6 +417,20 @@ svg.thumb{height:auto}
   background:#fff}
 .slide-fail{padding:60px 20px;text-align:center;color:var(--bad);font-size:13px}
 .slide-wait{padding:60px 20px;text-align:center;color:var(--muted);font-size:13px}
+/* The library preview cannot show filled values, and that has to be said
+   on the screen rather than in a doc nobody opens. */
+.viewer-note{margin:0;padding:10px 14px 14px;font-size:12.5px;
+  color:var(--muted);line-height:1.5}
+.viewer-note b{color:var(--fg)}
+/* staged files, waiting to be imported together */
+.staged{margin:10px 0 0;border:1px solid var(--line);border-radius:6px;
+  background:var(--panel-2);padding:10px 12px}
+.stage-row{display:flex;align-items:baseline;gap:8px;padding:3px 0;
+  font-size:12.5px;color:var(--muted)}
+.stage-row.on{color:var(--fg)}
+.stage-row.on .stage-tick{color:var(--ok)}
+.stage-tick{width:14px;flex:none;color:var(--line-strong);font-size:12px}
+.stage-go{display:flex;gap:8px;margin-top:9px}
 .hint.warn-text{color:var(--warn)}
 .nav{border:1px solid var(--line);background:var(--panel);color:var(--muted);
   border-radius:8px;width:38px;height:62px;font-size:22px;line-height:1;flex:none}

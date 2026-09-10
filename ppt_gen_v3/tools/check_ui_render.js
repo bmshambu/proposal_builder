@@ -101,7 +101,7 @@ const CANNED = [
     shared: false,
   }],
   [/\/api\/builds\/[0-9a-f]+\/slides/, {
-    engine: "powerpoint", why: null,
+    engine: "library", why: null,
     slides: [{ index: 1, title: "Cover", png: "/api/builds/x/png/1", svg: null, unsupported: [], error: null },
     { index: 2, title: "Fees", png: "/api/builds/x/png/2", svg: null, unsupported: [], error: null }],
   }],
@@ -228,8 +228,13 @@ try {
       problems.push("filmstrip does not show one exported PNG per slide");
     if (!/loading="lazy"/.test(strip))
       problems.push("filmstrip images are not lazy - 60 slides would load at once");
-    if (!/rendered by PowerPoint/.test(how))
-      problems.push("the viewer does not say PowerPoint drew it");
+    if (!/rendered from your library/.test(how))
+      problems.push("the viewer does not name the renderer that drew it");
+    // The library preview cannot show filled values. If that stops being said
+    // on screen, someone will read {{ClientName}} as a bug in their deck.
+    const dis = (boxes["viewer-note"] || {});
+    if (dis.hidden !== false || !/Placeholders show unfilled/.test(dis.innerHTML || ""))
+      problems.push("the library preview does not disclaim unfilled placeholders");
     const approx = V.big({ index: 1, png: null, svg: DEMO_SVG });
     if (!/<svg class="slide"/.test(approx))
       problems.push("viewer cannot fall back to the SVG renderer");

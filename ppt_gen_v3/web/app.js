@@ -62,10 +62,20 @@ function filePicker(accept, onFile) {
   const input = document.createElement("input");
   input.type = "file";
   input.accept = accept;
+  input.multiple = accept.includes(",");     // a library is a .pptx AND its .pdf
   input.hidden = true;
-  input.onchange = () => { if (input.files[0]) onFile(input.files[0]); input.value = ""; };
+  input.onchange = () => {
+    [...input.files].forEach(onFile);
+    input.value = "";
+  };
   document.body.appendChild(input);
   return input;
+}
+
+/** ".pptx" or ".pptx,.pdf" - does this filename match? */
+function accepts(accept, name) {
+  return !accept || accept.split(",").some(ext =>
+    name.toLowerCase().endsWith(ext.trim()));
 }
 
 function dropTarget(el, accept, onFile) {
@@ -76,13 +86,15 @@ function dropTarget(el, accept, onFile) {
     e.preventDefault(); el.classList.remove("over");
   }));
   el.addEventListener("drop", e => {
-    const f = e.dataTransfer.files[0];
-    if (!f) return;
-    if (accept && !f.name.toLowerCase().endsWith(accept)) {
-      flash(`${f.name} is not a ${accept} file`, "bad");
-      return;
+    const files = [...e.dataTransfer.files];
+    if (!files.length) return;
+    for (const f of files) {
+      if (!accepts(accept, f.name)) {
+        flash(`${f.name} is not a ${accept} file`, "bad");
+        continue;
+      }
+      onFile(f);
     }
-    onFile(f);
   });
 }
 
@@ -96,6 +108,7 @@ const S = {
   dirty: false, editing: null, built: null,
   check: { ours: null, templafy: null },
   slides: [], slideAt: 0,        // the built deck, for the viewer
+  stage: { pptx: null, pdf: null },   // an import waiting for both its files
 };
 
 const block = (id) => (S.inspect ? S.inspect.blocks.find(b => b.id === id) : null);
@@ -345,11 +358,52 @@ async function renderLibrary() {
 }
 
 // ----------------------------------------------------- upload a new library
-const libPicker = filePicker(".pptx", uploadLibrary);
+/* A library is two files, and they arrive in whatever order they arrive in.
+ *
+ * The .pptx is the library. The .pdf is what the deck viewer previews from -
+ * pages copied out of it, mirroring the slides copied out of the .pptx - which
+ * is what lets previews work with no converter installed anywhere. So both are
+ * staged first and imported together, rather than the .pptx importing on drop
+ * and the .pdf arriving too late to be part of it.
+ */
+const libPicker = filePicker(".pptx,.pdf", stageLibraryFile);
 $("choose").onclick = () => libPicker.click();
-dropTarget($("dropzone"), ".pptx", uploadLibrary);
+dropTarget($("dropzone"), ".pptx,.pdf", stageLibraryFile);
 
-async function uploadLibrary(file) {
+function stageLibraryFile(file) {
+  const ext = file.name.toLowerCase().split(".").pop();
+  if (ext === "pptx") S.stage.pptx = file;
+  else if (ext === "pdf") S.stage.pdf = file;
+  else return flash(`${file.name} is not a .pptx or .pdf`, "bad");
+  renderStaged();
+}
+
+function renderStaged() {
+  const box = $("staged"), st = S.stage;
+  if (!st.pptx && !st.pdf) { box.innerHTML = ""; box.hidden = true; return; }
+  box.hidden = false;
+  const row = (label, file, note) => `
+    <div class="stage-row ${file ? "on" : ""}">
+      <span class="stage-tick">${file ? "&#10003;" : "&#8213;"}</span>
+      <b>${label}</b>
+      <span class="m">${file ? esc(file.name) : note}</span>
+    </div>`;
+  box.innerHTML =
+    row("library .pptx", st.pptx, "required")
+    + row("library .pdf", st.pdf,
+      "optional — without it the viewer falls back to an approximation")
+    + `<div class="stage-go">
+         <button class="btn primary" id="stage-import"
+                 ${st.pptx ? "" : "disabled"}>Import library</button>
+         <button class="btn" id="stage-clear">Clear</button>
+       </div>`;
+  $("stage-import").onclick = () => uploadLibrary();
+  $("stage-clear").onclick = () => { S.stage = { pptx: null, pdf: null }; renderStaged(); };
+}
+
+async function uploadLibrary() {
+  const file = S.stage.pptx;
+  if (!file) return flash("Drop the library .pptx first", "bad");
   const name = ($("lib-name").value || "").trim();
   if (!/^[a-z0-9_]{1,64}$/.test(name)) {
     flash("Give the library a name first — lower case, digits and underscores", "bad");
@@ -366,10 +420,17 @@ async function uploadLibrary(file) {
   form.append("name", name);
   form.append("description", $("lib-desc").value || "");
   form.append("overwrite", exists ? "true" : "false");
+  if (S.stage.pdf) form.append("pdf", S.stage.pdf);
   flash(`Importing ${file.name}…`, "ok");
   try {
     const r = await api("/api/libraries", { method: "POST", body: form });
     flash(`Imported ${r.imported.slides} slides as "${name}"`, "ok");
+    // A refused PDF is not a failed import, but it is not nothing either: the
+    // viewer will fall back and nobody would know why unless it is said here.
+    const p = r.imported.preview || {};
+    if (!p.pdf) flash(`No preview PDF: ${p.why || "none was uploaded"}`, "bad");
+    S.stage = { pptx: null, pdf: null };
+    renderStaged();
     S.lib = null;
     await loadLibraries(name);
   } catch (err) { flash(err.message, "bad"); }
@@ -1109,12 +1170,28 @@ async function loadBuiltSlides(token) {
     const r = await getJSON(`/api/builds/${token}/slides`);
     S.slides = r.slides || [];
     S.slideAt = 0;
-    note.className = r.engine === "powerpoint" ? "hint" : "hint warn-text";
-    note.innerHTML = r.engine === "powerpoint"
-      ? "rendered by PowerPoint &middot; arrow keys to move"
-      : `approximation, not PowerPoint &mdash; ${esc(r.why || "PowerPoint is "
-        + "not available here")}. Check the downloaded file before trusting how
-         this looks.`;
+    // Name the renderer. The deployment will not have PowerPoint, so "which one
+    // drew this" is the difference between a preview that holds and one that
+    // changes underneath you later.
+    const NAMED = { libreoffice: "LibreOffice", powerpoint: "PowerPoint",
+                    library: "your library" };
+    note.className = r.engine === "svg" ? "hint warn-text" : "hint";
+    note.innerHTML = r.engine === "svg"
+      ? `approximation, not the real deck &mdash; ${esc(r.why || "no renderer is "
+        + "available here")}. Check the downloaded file before trusting how this
+         looks.`
+      : `rendered from ${NAMED[r.engine] || esc(r.engine)}
+         &middot; arrow keys to move`;
+    // The library preview is cut from pages that predate substitution, so the
+    // cover reads {{ClientName}}. Say it plainly and every time: someone who
+    // thinks their deck shipped that way will go looking for a bug that is not
+    // there, and someone who assumes the values are fine has not checked them.
+    const dis = $("viewer-note");
+    dis.hidden = r.engine !== "library";
+    dis.innerHTML = `<b>*</b> Placeholders show unfilled here. These are your
+      library's own slides, so this confirms <b>which slides and in what
+      order</b> &mdash; the filled values are in the downloaded .pptx, and on
+      the Values screen.`;
     renderViewer();
     const broke = S.slides.filter(s => !s.png && !s.svg).length;
     if (broke) flash(`${broke} slide(s) could not be previewed — they are still `
