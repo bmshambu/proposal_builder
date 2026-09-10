@@ -369,3 +369,14 @@ td.used{color:var(--muted);font-size:12.5px;white-space:nowrap}
 .pill.warn{background:var(--warn-soft);color:var(--warn)}
 .pill.ok{background:var(--ok-soft);color:var(--ok)}
 .preview{color:var(--muted);font-size:12.5px;font-style:italic}
+.flash{font-size:12px;padding:4px 11px;border-radius:20px;max-width:44ch;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.flash.ok{background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok-line)}
+.flash.bad{background:var(--bad-soft);color:var(--bad);border:1px solid var(--bad-line)}
+/* a thumbnail that has not arrived yet keeps its box, so the grid does not
+   reflow under the reader when 128 slides finish rendering */
+.thumb.pending{display:block;aspect-ratio:16/9;background:var(--panel-2)}
+.thumb.lg{width:100%}
+svg.thumb{height:auto}
+.btn:disabled{opacity:.45;cursor:not-allowed;border-color:var(--line);color:var(--muted)}
+.notice hr{border:none;border-top:1px solid currentColor;opacity:.2;margin:8px 0}
