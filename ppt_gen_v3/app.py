@@ -204,10 +204,27 @@ def deck_as_rules(rows: List[dict], existing: dict) -> dict:
     one client's snapshot.
     """
     spec = dict(existing or {})
+    was = (existing or {}).get("blocks") or {}
+
+    blocks = {}
+    for r in rows:
+        bid = r["id"]
+        # Merge into what the block already said, never replace it. The UI
+        # edits two things - order and condition - and a rule can carry more
+        # than that: `variant` swaps a slide's content without moving it, and
+        # a block may map to several slides. Rebuilding the entry from scratch
+        # deleted both, silently, on the first save after an author dragged a
+        # row. `insert_after` is the one key deliberately dropped: the UI's
+        # order is explicit, so describing a position is not just redundant,
+        # it is a second source of truth that can disagree.
+        sub = dict(was.get(bid) or {})
+        sub.pop("insert_after", None)
+        sub["slides"] = sub.get("slides") or [bid]
+        sub["when"] = r.get("when") or "always"
+        blocks[bid] = sub
+
     spec["baseline"] = [r["id"] for r in rows]
-    spec["blocks"] = {r["id"]: {"slides": [r["id"]],
-                                "when": r.get("when") or "always"}
-                      for r in rows}
+    spec["blocks"] = blocks
     spec.setdefault("placeholders", (existing or {}).get("placeholders", {}))
     return spec
 

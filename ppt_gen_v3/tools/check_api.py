@@ -76,7 +76,14 @@ def main():
     # Run before anything that depends on the demo's authored rules, and put
     # them back at the end - a check that leaves the fixture altered is a
     # check you can only run once.
-    original = json.load(open(os.path.join(demo, "rules.json"), encoding="utf-8"))
+    # Keep the bytes, not just the meaning. Restore rewrites the file through
+    # json.dump, which preserves what the rules *say* while reformatting a
+    # hand-authored file - enough to leave the repo dirty after every run. A
+    # check that alters a committed fixture is one people stop running.
+    rules_path = os.path.join(demo, "rules.json")
+    with open(rules_path, "rb") as fh:
+        original_bytes = fh.read()
+    original = json.loads(original_bytes.decode("utf-8"))
 
     r = client.post("/api/libraries/demo/rules/reset", json={})
     reset = r.json()
@@ -113,11 +120,44 @@ def main():
     check("restore refuses a missing backup", r.status_code == 404,
           r.json().get("detail", "")[:44])
 
-    now = json.load(open(os.path.join(demo, "rules.json"), encoding="utf-8"))
+    now = json.load(open(rules_path, encoding="utf-8"))
     check("the demo template is back as it was",
           now.get("baseline") == original.get("baseline")
           and now.get("blocks") == original.get("blocks"),
           "restore round-tripped the fixture")
+
+    # A save rewrites every block entry. Anything the UI does not edit - a
+    # `variant`, a block mapping to several slides - has to survive it, or an
+    # author loses a rule by dragging a row and pressing save.
+    r = client.get("/api/libraries/demo/rules")
+    deck = r.json()["deck"]
+    r = client.put("/api/libraries/demo/rules", json={"deck": deck})
+    check("save keeps what the UI does not edit", r.status_code == 200,
+          "saved %d rows unchanged" % len(deck))
+    after = json.load(open(rules_path, encoding="utf-8"))
+    for bid, sub in (original.get("blocks") or {}).items():
+        if "variant" in sub:
+            check("variant on %r survives a save" % bid,
+                  "variant" in (after.get("blocks") or {}).get(bid, {}),
+                  "content-swap rules are not selection, and are not the UI's "
+                  "to delete")
+        if len(sub.get("slides") or []) > 1:
+            check("multi-slide block %r keeps its slides" % bid,
+                  (after["blocks"][bid].get("slides") == sub["slides"]))
+    check("save drops insert_after",
+          not any("insert_after" in s for s in (after.get("blocks") or {}).values()),
+          "the UI's order is explicit - a second source of truth can disagree")
+
+    # put the fixture back byte for byte, so this suite can be run twice
+    with open(rules_path, "wb") as fh:
+        fh.write(original_bytes)
+    for name in os.listdir(demo):
+        if name.startswith("rules.json.") and name.endswith(".bak"):
+            os.remove(os.path.join(demo, name))
+    with open(rules_path, "rb") as fh:
+        check("the fixture is byte-identical afterwards",
+              fh.read() == original_bytes,
+              "running the checks leaves the repo clean")
 
     # ---------------------------------------------------------- selection
     exp = json.load(open(os.path.join(demo, "answers.expansion.json"),
