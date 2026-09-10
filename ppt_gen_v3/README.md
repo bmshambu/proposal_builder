@@ -9,6 +9,7 @@ pip install -r requirements.txt
 uvicorn app:app --reload          # http://127.0.0.1:8000
 python tools/check_api.py         # every endpoint, against the real engine
 python tools/make_library_pdf.py templates/firm    # once per library, needs PowerPoint
+python tools/shoot_ui.py          # photograph the build screen and look at it
 ```
 
 Interactive API docs come free at `/docs`.

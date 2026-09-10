@@ -1028,6 +1028,7 @@ function invalidateBuild() {
   S.built = null;
   S.slides = [];
   if ($("viewer-panel")) $("viewer-panel").hidden = true;
+  syncBuildLayout();
   $("build-dl").disabled = true;
   $("build-status").textContent = "answers changed — build again";
 }
@@ -1112,10 +1113,17 @@ function small(s) {
   return '<span class="fthumb fail"></span>';
 }
 
+/** The build screen has two shapes: before a deck, and with one. */
+function syncBuildLayout() {
+  const cols = $("build-cols");
+  if (cols) cols.classList.toggle("with-deck", !$("viewer-panel").hidden);
+}
+
 function renderViewer() {
   const panel = $("viewer-panel");
-  if (!S.slides || !S.slides.length) { panel.hidden = true; return; }
+  if (!S.slides || !S.slides.length) { panel.hidden = true; syncBuildLayout(); return; }
   panel.hidden = false;
+  syncBuildLayout();
   const at = Math.max(0, Math.min(S.slideAt || 0, S.slides.length - 1));
   S.slideAt = at;
   const s = S.slides[at];
@@ -1159,6 +1167,7 @@ document.addEventListener("keydown", (e) => {
 async function loadBuiltSlides(token) {
   const panel = $("viewer-panel"), note = $("viewer-how");
   panel.hidden = false;
+  syncBuildLayout();
   $("viewer-count").textContent = "";
   $("viewer-strip").innerHTML = "";
   $("viewer-stage").innerHTML =

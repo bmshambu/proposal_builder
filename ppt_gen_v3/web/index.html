@@ -256,9 +256,13 @@
      so a different shape: no library internals, no block ids, no rules -
      answer the questions, see what you will get, take the deck. -->
 <section class="screen" id="screen-build">
-  <div class="cols build">
+  <!-- Two columns before a deck exists, and a different two after it: the
+       preview becomes the point of the screen, so the answers narrow and it
+       takes the space. Sitting full-width underneath meant scrolling past
+       everything to reach the thing you just asked for. -->
+  <div class="cols build" id="build-cols">
 
-    <div class="panel">
+    <div class="panel" id="answers-panel">
       <h2>Answers <span class="hint" id="build-src"></span></h2>
       <div class="tabrow">
         <button class="seg-btn on" data-answers="form">Fill the form</button>
@@ -284,7 +288,7 @@
       </div>
     </div>
 
-    <div class="panel">
+    <div class="panel" id="getting-panel">
       <h2>What you will get <span class="count" id="build-count"></span>
         <span class="hint">recalculated as you answer</span></h2>
       <div class="notice bad" id="build-warn"></div>
@@ -296,8 +300,6 @@
         <span class="fld-note" id="build-status">nothing built yet</span>
       </div>
     </div>
-
-  </div>
 
   <!-- The built deck, not the library. It shows what selection produced and
        what every placeholder became - the only version anyone receives.
@@ -314,6 +316,8 @@
     </div>
     <div class="filmstrip" id="viewer-strip"></div>
     <p class="viewer-note" id="viewer-note" hidden></p>
+  </div>
+
   </div>
 </section>
 

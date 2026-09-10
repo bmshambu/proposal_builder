@@ -122,6 +122,10 @@ main{padding:16px 18px 30vh}
 .screen.on{display:block}
 
 .cols{display:grid;grid-template-columns:290px 1fr;gap:16px;align-items:start}
+/* Grid items default to min-width:auto, so a panel containing something wide -
+   the filmstrip, 112px per slide - refuses to shrink and pushes the whole page
+   past the window instead of scrolling inside itself. */
+.cols > *{min-width:0}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius)}
 .panel>h2{padding:11px 14px;border-bottom:1px solid var(--line);font-size:13px;
   display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -297,6 +301,29 @@ main{padding:16px 18px 30vh}
 
 /* ---------------------------------------------------------------- build */
 .cols.build{grid-template-columns:1fr 1fr}
+/* Once a deck is built the preview takes the right-hand column and stays
+   there while the answers scroll. Full-width underneath meant a slide the size
+   of the window, reached by scrolling past everything else. */
+.cols.build.with-deck{grid-template-columns:minmax(260px,330px) 1fr}
+.cols.build.with-deck #answers-panel{grid-column:1;grid-row:1}
+.cols.build.with-deck #getting-panel{grid-column:1;grid-row:2}
+.cols.build.with-deck #viewer-panel{grid-column:2;grid-row:1/3;
+  position:sticky;top:14px;max-height:calc(100vh - 28px);
+  display:flex;flex-direction:column}
+.cols.build.with-deck #viewer-panel .viewer{flex:1;min-height:0}
+.cols.build.with-deck .formgrid{max-height:38vh}
+.cols.build.with-deck .buildlist{max-height:26vh}
+
+/* One column when there is not room for two. The preview goes back to the
+   bottom, which is the right answer on a narrow window even though it is the
+   wrong one on a wide screen. */
+@media (max-width:1080px){
+  .cols.build,.cols.build.with-deck{grid-template-columns:1fr}
+  .cols.build.with-deck #answers-panel,
+  .cols.build.with-deck #getting-panel,
+  .cols.build.with-deck #viewer-panel{grid-column:1;grid-row:auto}
+  .cols.build.with-deck #viewer-panel{position:static;max-height:none}
+}
 .tabrow{display:flex;gap:2px;padding:9px 14px 0}
 .seg-btn{background:none;border:1px solid transparent;border-bottom:2px solid transparent;
   padding:6px 12px;color:var(--muted);font-size:13px}
@@ -405,16 +432,22 @@ svg.thumb{height:auto}
 .md blockquote code{background:rgba(0,0,0,.08)}
 
 /* ------------------------------------------------------------- the viewer */
-.viewer{display:flex;align-items:center;gap:12px;padding:14px}
-.stage{flex:1;min-width:0;display:flex;align-items:center;justify-content:center;
-  background:var(--panel-2);border:1px solid var(--line);border-radius:6px;
-  padding:10px;overflow:hidden}
+/* The arrows overlay the stage rather than sitting beside it. Beside it they
+   ended up against the panel edges, a hand's width from the slide they move,
+   because the stage is wider than a 16:9 slide at this height. */
+.viewer{position:relative;display:flex;align-items:center;justify-content:center;
+  padding:14px;width:fit-content;max-width:100%;margin:0 auto}
+/* The stage hugs the slide. Letting it stretch put a hand's width of near-white
+   either side of a slide that is mostly white, which read as part of the deck. */
+.stage{flex:0 1 auto;min-width:0;max-width:100%;display:flex;
+  align-items:center;justify-content:center;background:var(--panel-2);
+  border:1px solid var(--line);border-radius:6px;padding:10px;overflow:hidden}
 /* object-fit matters once this is a PNG: width:100% with a max-height would
    otherwise squash an exported slide instead of letterboxing it, and a preview
    with the wrong aspect ratio is a preview that lies about the layout. */
-.stage .slide{width:100%;height:auto;max-height:62vh;display:block;
-  object-fit:contain;border:1px solid var(--line);border-radius:3px;
-  background:#fff}
+.stage .slide{width:auto;max-width:100%;height:auto;max-height:58vh;
+  display:block;object-fit:contain;border:1px solid var(--line);
+  border-radius:3px;background:#fff}
 .slide-fail{padding:60px 20px;text-align:center;color:var(--bad);font-size:13px}
 .slide-wait{padding:60px 20px;text-align:center;color:var(--muted);font-size:13px}
 /* The library preview cannot show filled values, and that has to be said
@@ -432,8 +465,12 @@ svg.thumb{height:auto}
 .stage-tick{width:14px;flex:none;color:var(--line-strong);font-size:12px}
 .stage-go{display:flex;gap:8px;margin-top:9px}
 .hint.warn-text{color:var(--warn)}
-.nav{border:1px solid var(--line);background:var(--panel);color:var(--muted);
-  border-radius:8px;width:38px;height:62px;font-size:22px;line-height:1;flex:none}
+.nav{position:absolute;top:50%;transform:translateY(-50%);z-index:2;
+  border:1px solid var(--line);background:var(--panel);color:var(--muted);
+  border-radius:8px;width:34px;height:56px;font-size:22px;line-height:1;
+  flex:none;opacity:.9}
+#viewer-prev{left:22px}
+#viewer-next{right:22px}
 .nav:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
 .nav:disabled{opacity:.3;cursor:not-allowed}
 .filmstrip{display:flex;gap:8px;overflow-x:auto;padding:0 14px 14px}

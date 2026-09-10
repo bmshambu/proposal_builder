@@ -228,6 +228,10 @@ try {
       problems.push("filmstrip does not show one exported PNG per slide");
     if (!/loading="lazy"/.test(strip))
       problems.push("filmstrip images are not lazy - 60 slides would load at once");
+    // The preview only earns the right-hand column once a deck exists; before
+    // that the two panels want the width.
+    if (!(boxes["build-cols"] || {}).classList.contains("with-deck"))
+      problems.push("the build screen did not give the preview its column");
     if (!/rendered from your library/.test(how))
       problems.push("the viewer does not name the renderer that drew it");
     // The library preview cannot show filled values. If that stops being said
