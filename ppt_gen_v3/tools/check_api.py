@@ -237,10 +237,61 @@ def main():
           client.get("/download/" + "0" * 16).status_code == 404)
 
     # -------------------------------------------------------------- fields
-    r = client.get("/api/fields")
-    check("GET /api/fields", r.status_code == 200,
-          "%d field(s) from %d payload(s)"
+    # Answer sets belong to a library, not to the app. Two templates ask
+    # different questions, and one shared folder offered an author fields from
+    # a form their deck has never seen - with nothing to show it was wrong,
+    # because a field that exists somewhere looks like a field that exists here.
+    r = client.get("/api/libraries/demo/fields")
+    check("GET /libraries/demo/fields", r.status_code == 200,
+          "%d field(s) from %d answer set(s)"
           % (len(r.json()["fields"]), len(r.json()["payloads"])))
+
+    r = client.post("/api/libraries/demo/payloads",
+                    json={"name": "probe", "answers": {"OnlyHere": "yes"}})
+    check("POST a payload keeps it", r.status_code == 200
+          and "OnlyHere" in r.json()["fields"],
+          "added %s, %d field(s)" % (r.json().get("saved"),
+                                     len(r.json()["fields"])))
+    again = client.post("/api/libraries/demo/payloads",
+                        json={"name": "probe", "answers": {"OnlyHere": "no"}})
+    check("the same name replaces, and says so", again.json().get("replaced"),
+          "one file, not two")
+    check("a second name is added alongside",
+          client.post("/api/libraries/demo/payloads",
+                      json={"name": "probe2", "answers": {"OnlyHere": "maybe"}}
+                      ).json()["payloads"].__len__() == 2,
+          "adding is by name")
+
+    # The isolation itself, which is the reason for the move. A field only one
+    # library's answer sets mention must not appear in another's - offering it
+    # would let an author write a condition on a question their deck is never
+    # asked, and nothing on screen would look wrong.
+    import shutil as _sh
+    second = os.path.join(ROOT, "templates", "demo_two")
+    _sh.rmtree(second, ignore_errors=True)
+    with open(os.path.join(demo, "library.pptx"), "rb") as fh:
+        client.post("/api/libraries", files={"file": ("l.pptx", fh.read())},
+                    data={"name": "demo_two"})
+    client.post("/api/libraries/demo_two/payloads",
+                json={"name": "other", "answers": {"SomewhereElse": "x"}})
+    mine = client.get("/api/libraries/demo/fields").json()["fields"]
+    theirs = client.get("/api/libraries/demo_two/fields").json()["fields"]
+    check("one library cannot see another's fields",
+          "SomewhereElse" in theirs and "SomewhereElse" not in mine,
+          "demo_two has it, demo does not")
+    check("and not the other way either",
+          "OnlyHere" in mine and "OnlyHere" not in theirs)
+    _sh.rmtree(second, ignore_errors=True)
+    _sh.rmtree(os.path.join(ROOT, "data", "payloads", "demo_two"),
+               ignore_errors=True)
+
+    r = client.delete("/api/libraries/demo/payloads/probe")
+    check("DELETE drops one", r.status_code == 200
+          and len(r.json()["payloads"]) == 1,
+          "a wrong answer set can be taken back out")
+    client.delete("/api/libraries/demo/payloads/probe2")
+    check("DELETE of a missing one is 404",
+          client.delete("/api/libraries/demo/payloads/nope").status_code == 404)
 
     print("\n%d passed, %d failed %s"
           % (len(PASS), len(FAIL), ", ".join(FAIL) if FAIL else ""))

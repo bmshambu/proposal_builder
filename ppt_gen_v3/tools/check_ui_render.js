@@ -88,7 +88,7 @@ global.document = {
 // ------------------------------------------------------------------- fetch
 const DEMO_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 56"><rect/></svg>';
 const CANNED = [
-  [/\/api\/fields$/, {
+  [/\/fields$/, {
     fields: {
       AuditType: { kind: "choice", values: ["New Audit Client", "Expansion of Services"], eg: "New Audit Client", varies: true },
       DueDate: { kind: "date", values: [], eg: "20261130", varies: true },
@@ -98,6 +98,7 @@ const CANNED = [
       "I agree to comply": { kind: "choice", values: ["Accept"], eg: "Accept", varies: false },
     },
     payloads: [{ label: "p1", answers: { AuditType: "New Audit Client", DueDate: "20261130", Quality: true } }],
+    shared: false,
   }],
   [/\/api\/libraries$/, [{ id: "demo", name: "Demo", description: "", slides: 3, unnamed: 0, answer_sets: [], real: true }]],
   [/\/thumbs/, [{ id: "cover", title: "Cover", svg: DEMO_SVG, placeholders: [] },

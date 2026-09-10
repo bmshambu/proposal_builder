@@ -37,8 +37,10 @@ async function api(path, opts) {
 const getJSON = (p) => api(p);
 const sendJSON = (p, obj, method) => api(p, {
   method: method || "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(obj),
+  // A DELETE carries no body, and sending "null" as one makes FastAPI reject
+  // the request for a malformed payload it never wanted.
+  ...(obj === null ? {} : { headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify(obj) }),
 });
 
 let flashTimer = null;
@@ -249,6 +251,15 @@ async function openLibrary(id) {
   const rules = await getJSON(`/api/libraries/${id}/rules`);
   S.deck = rules.deck;
   S.bindings = rules.placeholders || {};
+
+  // Answer sets belong to the library they describe, so they are re-read on
+  // every switch. Carrying the previous library's fields across would offer
+  // conditions on questions this template never asks.
+  try {
+    const cat = await getJSON(`/api/libraries/${id}/fields`);
+    S.fields = cat.fields; S.presets = cat.payloads; S.shared = cat.shared;
+  } catch (_) { S.fields = {}; S.presets = []; S.shared = false; }
+  fillPresets();
 
   const meta = S.libs.find(l => l.id === id) || {};
   $("lib-name").value = id;
@@ -620,28 +631,59 @@ $("qdrop").addEventListener("drop", (e) => {
 });
 
 async function addSamples(files) {
+  if (!S.lib) { flash("Import a library first — answer sets belong to one", "bad"); return; }
   let cat = null;
   for (const file of files) {
     try {
       const answers = JSON.parse(await file.text());
-      cat = await sendJSON("/api/payloads",
+      cat = await sendJSON(`/api/libraries/${S.lib}/payloads`,
         { name: file.name.replace(/\.json$/i, ""), answers });
     } catch (err) {
       flash(`${file.name}: ${err.message}`, "bad");
     }
   }
   if (!cat) return;
-  S.fields = cat.fields; S.presets = cat.payloads;
+  S.fields = cat.fields; S.presets = cat.payloads; S.shared = cat.shared;
   fillPresets();
-  flash(`${S.presets.length} answer set(s) — ${Object.keys(S.fields).length} field(s)`, "ok");
+  // "Added" and "Replaced" look identical otherwise, and replacing an answer
+  // set by re-using its name is exactly the thing worth noticing.
+  flash(`${cat.replaced ? "Replaced" : "Added"} ${cat.saved} — now `
+    + `${S.presets.length} answer set(s), ${Object.keys(S.fields).length} field(s)`, "ok");
   renderQuestions(); renderRules(); renderMapping(); renderBuild();
+}
+
+async function dropSample(labelName) {
+  if (!confirm(`Remove the answer set "${labelName}"?\n\nThe questions and `
+    + `values it contributed go with it. Rules already written are untouched, `
+    + `but a condition on a field only this set mentioned will have no field `
+    + `to show.`)) return;
+  try {
+    const cat = await sendJSON(
+      `/api/libraries/${S.lib}/payloads/${encodeURIComponent(labelName)}`,
+      null, "DELETE");
+    S.fields = cat.fields; S.presets = cat.payloads; S.shared = cat.shared;
+    fillPresets();
+    flash(`Removed ${labelName} — ${Object.keys(S.fields).length} field(s) left`, "ok");
+    renderQuestions(); renderRules(); renderMapping(); renderBuild();
+  } catch (err) { flash(err.message, "bad"); }
 }
 
 function renderQuestions() {
   const names = Object.keys(S.fields);
+  // Name each one and let it be removed. Adding is by name - a new name is
+  // kept alongside, the same name replaces - and a wrong set is not harmless:
+  // every field and value in it joins the catalogue, so it can put a question
+  // in the condition editor that no real request contains.
   $("qcurrent").innerHTML = S.presets.length
-    ? `<span class="f">${S.presets.length} answer set(s)</span>
-       <span class="m">${esc(S.presets.map(p => p.label).join(", ")).slice(0, 120)}</span>`
+    ? `<div class="vlist" style="width:100%">
+         ${S.presets.map(p => `<div class="vrow">
+           <span class="f">${esc(p.label)}</span>
+           <span class="m">${Object.keys(p.answers || {}).length} answers</span>
+           <span class="sp"></span>
+           ${S.shared ? `<span class="pill warn">shared</span>`
+        : `<button class="btn danger" data-drop="${esc(p.label)}">Remove</button>`}
+         </div>`).join("")}
+       </div>`
     : "";
   $("q-count").textContent = names.length ? `(${names.length})` : "";
 
@@ -650,7 +692,13 @@ function renderQuestions() {
   // letting someone discover it after writing the rule.
   const fixed = names.filter(f => S.fields[f].varies === false);
   const warn = $("q-warn");
-  warn.innerHTML = !names.length
+  warn.innerHTML = S.shared && S.presets.length
+    ? `<b>These answer sets are shared, not this library's</b>
+       They were uploaded before answer sets belonged to a library, so every
+       library still sees them. Drop them here again to attach them to
+       <code>${esc(S.lib)}</code> — until then another template's questions can
+       appear in this one's condition editor.`
+    : !names.length
     ? `<b>No answer sets yet</b> Drop the JSON files real requests arrive as.
        Until then the condition editor has no fields to offer and the build form
        has no questions.`
@@ -1034,9 +1082,10 @@ $("inputs-toggle").onclick = function () {
 $("pool-search").oninput = renderPool;
 
 document.addEventListener("click", (e) => {
-  const t = e.target.closest("[data-add],[data-del],[data-edit],[data-cancel],[data-apply],[data-restore]");
+  const t = e.target.closest("[data-add],[data-del],[data-edit],[data-cancel],[data-apply],[data-restore],[data-drop]");
   if (!t) return;
   if (t.dataset.restore !== undefined) { restore(t.dataset.restore); return; }
+  if (t.dataset.drop !== undefined) { dropSample(t.dataset.drop); return; }
   if (t.dataset.add !== undefined) { S.deck.push({ id: t.dataset.add, when: null }); S.dirty = true; }
   else if (t.dataset.del !== undefined) { S.deck = S.deck.filter(r => r.id !== t.dataset.del); S.dirty = true; }
   else if (t.dataset.edit !== undefined) {
@@ -1147,12 +1196,6 @@ window.addEventListener("beforeunload", (e) => {
   $("run-check").disabled = true;
   $("source-badge").textContent = "LIVE";
   $("source-badge").classList.add("real");
-  try {
-    const cat = await getJSON("/api/fields");
-    S.fields = cat.fields; S.presets = cat.payloads;
-    fillPresets();
-    renderQuestions();
-  } catch (_) { /* no payloads yet is a normal state, not an error */ }
   try {
     await loadLibraries();
   } catch (err) { flash(err.message, "bad"); }

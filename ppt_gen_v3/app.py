@@ -580,30 +580,89 @@ def download(token: str):
                    ".presentationml.presentation")
 
 
-@app.get("/api/fields", tags=["answers"])
-def get_fields():
-    """The one list of fields, read from the payloads themselves.
+def payload_dir(lib: str) -> str:
+    """Answer sets live under the library they describe.
+
+    They were in one shared folder, which is wrong the moment a second library
+    exists: two templates ask different questions, and mixing them offers an
+    author fields from a form their deck has never seen. Nothing warns, because
+    a field that exists somewhere looks exactly like a field that exists here.
+    """
+    d = os.path.join(PAYLOADS, lib)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def read_payloads_for(lib: str):
+    """-> (payloads, shared) - `shared` if these came from the old flat folder.
+
+    Files uploaded before payloads were scoped sit loose in data/payloads/.
+    Orphaning them silently would look like the app had lost them, so they are
+    still read when a library has none of its own, and reported as borrowed.
+    """
+    own = payloadsmod.read_all(payload_dir(lib))
+    if own:
+        return own, False
+    return payloadsmod.read_all(PAYLOADS), True
+
+
+def fields_for(lib: str) -> dict:
+    payloads, shared = read_payloads_for(lib)
+    return {"fields": payloadsmod.catalogue(payloads), "shared": bool(shared),
+            "payloads": [{"label": label, "answers": answers}
+                         for label, answers in payloads]}
+
+
+@app.get("/api/libraries/{lib}/fields", tags=["answers"])
+def get_fields(tpl: Template = Depends(library)):
+    """The one list of fields, read from this library's answer sets.
 
     It fills the build form *and* the condition editor, so a form and a rule
     can never disagree about a field's name or which values it takes. Typing a
     field name by hand is how a rule silently stops matching; the UI never
     offers the chance.
     """
-    payloads = payloadsmod.read_all(PAYLOADS)
-    return {"fields": payloadsmod.catalogue(payloads),
-            "payloads": [{"label": label, "answers": answers}
-                         for label, answers in payloads]}
+    return fields_for(os.path.basename(tpl.folder))
 
 
-@app.post("/api/payloads", tags=["answers"])
-def post_payload(body: SavePayload):
-    """Keep a payload so the catalogue can learn its fields and values."""
+@app.post("/api/libraries/{lib}/payloads", tags=["answers"])
+def post_payload(body: SavePayload, tpl: Template = Depends(library)):
+    """Keep an answer set so the catalogue can learn its fields and values.
+
+    Adding is by name: a new name is kept alongside the others, and the same
+    name replaces that one file. Everything present is read back into the
+    catalogue, so more answer sets mean fewer fields that look like they never
+    vary.
+    """
+    lib = os.path.basename(tpl.folder)
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", body.name)[:64] or "payload"
+    path = os.path.join(payload_dir(lib), safe + ".json")
+    replaced = os.path.exists(path)
     with WRITE_LOCK:
-        with open(os.path.join(PAYLOADS, safe + ".json"), "w",
-                  encoding="utf-8") as fh:
+        with open(path, "w", encoding="utf-8") as fh:
             json.dump(body.answers, fh, indent=2, ensure_ascii=False)
-    return get_fields()
+    out = fields_for(lib)
+    out["replaced"] = replaced
+    out["saved"] = safe
+    return out
+
+
+@app.delete("/api/libraries/{lib}/payloads/{name}", tags=["answers"])
+def delete_payload(name: str, tpl: Template = Depends(library)):
+    """Drop an answer set.
+
+    A wrong one is not harmless: every field and value in it joins the
+    catalogue, so it can put a field in the condition editor that no real
+    request contains. Uploading was reversible only by editing the disk.
+    """
+    lib = os.path.basename(tpl.folder)
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", name)[:64]
+    path = os.path.join(payload_dir(lib), safe + ".json")
+    if not os.path.isfile(path):
+        raise HTTPException(404, "no answer set called %r for %s" % (name, lib))
+    with WRITE_LOCK:
+        os.remove(path)
+    return fields_for(lib)
 
 
 @app.post("/api/compare", tags=["check"])
