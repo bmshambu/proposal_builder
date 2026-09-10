@@ -665,6 +665,62 @@ def delete_payload(name: str, tpl: Template = Depends(library)):
     return fields_for(lib)
 
 
+@app.post("/api/libraries/{lib}/suggest", tags=["rules"])
+async def post_suggest(
+    decks: List[UploadFile] = File(..., description="the decks these rules "
+                                                    "should produce"),
+    tpl: Template = Depends(library),
+):
+    """Read the decks and say what the rules should be. Applies nothing.
+
+    Answer sets come from this library's own, uploaded on the Questions screen,
+    and decks pair with them by name - `01_thing.pptx` with `01_thing.json`. A
+    deck whose payload is missing can only say which slides it holds, never
+    why, and the report says which those were.
+
+    If rules already exist it reports **what changes**, not everything. A second
+    batch should surface the two new things rather than restating the forty an
+    author has already confirmed.
+    """
+    from engine import suggest as suggestmod
+    from engine import suggest_md
+
+    name = os.path.basename(tpl.folder)
+    payloads = dict(read_payloads_for(name)[0])
+    tmpdir = tempfile.mkdtemp(prefix="pptgen3_suggest_")
+    try:
+        paths = []
+        for upload in decks:
+            path = await take_upload(upload, ".pptx", tmpdir)
+            # Keep the uploaded name: it is how a deck finds its answer set.
+            named = os.path.join(tmpdir, os.path.basename(upload.filename or "deck.pptx"))
+            if named != path:
+                os.replace(path, named)
+            paths.append(named)
+
+        try:
+            report = suggestmod.analyse(tpl.library_path, sorted(paths), payloads,
+                                        block_map=tpl.raw_block_map)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+
+        current = rules_as_deck(read_rules(tpl))
+        if current:
+            diff = suggestmod.compare(report, current)
+            markdown = suggest_md.changes(report, diff)
+        else:
+            diff = None
+            with tpl.open_library() as lib:
+                phs = sorted(lib.all_placeholders())
+            markdown = suggest_md.full(report, placeholders=phs)
+        return {"markdown": markdown, "diff": diff,
+                "decks": [d["label"] for d in report["decks"]],
+                "unpaired": report["unpaired"],
+                "incremental": bool(current)}
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 @app.post("/api/compare", tags=["check"])
 async def post_compare(
     ours: UploadFile = File(..., description="the deck this tool built"),

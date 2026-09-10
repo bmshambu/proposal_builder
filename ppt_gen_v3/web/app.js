@@ -589,6 +589,98 @@ $("rules-reset").onclick = async () => {
   } catch (err) { flash(err.message, "bad"); }
 };
 
+// ------------------------------------------------------- rules: suggestion
+/** A very small markdown renderer - headings, lists, blockquotes, bold, code.
+ *  The report is written by us and read by an author, so it needs to be
+ *  legible, not complete. Everything is escaped before any formatting is
+ *  applied: the report quotes field names and values that came from the
+ *  author's own files, and those are text, not markup. */
+function md(src) {
+  const inline = (t) => esc(t)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  const out = [];
+  let list = null;
+  const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+
+  for (const raw of String(src).split("\n")) {
+    const line = raw.replace(/\s+$/, "");
+    const h = line.match(/^(#{1,4})\s+(.*)$/);
+    const li = line.match(/^(\s*)[-*]\s+(.*)$/);
+    const ol = line.match(/^(\d+)\.\s+(.*)$/);
+    const q = line.match(/^>\s?(.*)$/);
+    if (h) { closeList(); out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); }
+    else if (li) {
+      if (list !== "ul") { closeList(); out.push("<ul>"); list = "ul"; }
+      out.push(`<li${li[1].length >= 2 ? ' class="sub"' : ""}>${inline(li[2])}</li>`);
+    } else if (ol) {
+      if (list !== "ol") { closeList(); out.push("<ol>"); list = "ol"; }
+      out.push(`<li>${inline(ol[2])}</li>`);
+    } else if (q) { closeList(); out.push(`<blockquote>${inline(q[1])}</blockquote>`); }
+    else if (!line.trim()) { closeList(); }
+    else { closeList(); out.push(`<p>${inline(line)}</p>`); }
+  }
+  closeList();
+  return out.join("");
+}
+
+const deckPicker = filePicker(".pptx", null);
+deckPicker.multiple = true;
+deckPicker.onchange = () => {
+  if (deckPicker.files.length) askSuggest([...deckPicker.files]);
+  deckPicker.value = "";
+};
+$("pick-decks").onclick = () => deckPicker.click();
+$("sdrop").addEventListener("drop", (e) => {
+  const files = [...(e.dataTransfer.files || [])]
+    .filter(f => /\.pptx$/i.test(f.name) && !f.name.startsWith("~$"));
+  if (files.length) askSuggest(files);
+});
+dropTarget($("sdrop"), null, () => { });   // just the hover styling
+
+$("rules-suggest").onclick = () => {
+  const p = $("suggest-panel");
+  p.hidden = !p.hidden;
+};
+$("suggest-close").onclick = () => { $("suggest-panel").hidden = true; };
+
+let lastSuggestion = "";
+async function askSuggest(files) {
+  const form = new FormData();
+  files.forEach(f => form.append("decks", f));
+  $("suggest-out").innerHTML = `<p class="fld-note">Reading ${files.length} deck(s)…</p>`;
+  $("suggest-acts").hidden = true;
+  try {
+    const r = await api(`/api/libraries/${S.lib}/suggest`,
+      { method: "POST", body: form });
+    lastSuggestion = r.markdown;
+    $("suggest-out").innerHTML = md(r.markdown);
+    $("suggest-acts").hidden = false;
+    $("suggest-note").textContent = r.incremental
+      ? "only what these decks change — rules that already match are counted, not listed"
+      : "the full walkthrough — this library has no rules yet";
+    if (r.unpaired.length)
+      flash(`${r.unpaired.length} deck(s) had no answer set: ${r.unpaired.slice(0, 3).join(", ")}`,
+        "bad");
+  } catch (err) {
+    $("suggest-out").innerHTML = `<p class="fld-note warn">${esc(err.message)}</p>`;
+  }
+}
+
+$("suggest-copy").onclick = async () => {
+  try { await navigator.clipboard.writeText(lastSuggestion); flash("Copied", "ok"); }
+  catch (_) { flash("Could not reach the clipboard — use Download instead", "bad"); }
+};
+$("suggest-download").onclick = () => {
+  const blob = new Blob([lastSuggestion], { type: "text/markdown" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${S.lib}-suggested-rules.md`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+
 $("rules-history").onclick = async () => {
   const panel = $("rules-panel");
   if (!panel.hidden) { panel.hidden = true; return; }

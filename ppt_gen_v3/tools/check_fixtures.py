@@ -128,6 +128,61 @@ def main():
                  res["matched"],
                  ", ".join("%s %d" % kv for kv in sorted(res["by_method"].items()))))
 
+    # 3b ------------------------------------------- suggesting, and re-suggesting
+    # The answer sets have to be in the library for the endpoint to use them:
+    # a deck whose payload is missing can say which slides it holds, never why.
+    for label in sorted(os.listdir(os.path.join(FX, "payloads"))):
+        if label.endswith(".json"):
+            client.post("/api/libraries/%s/payloads" % LIB,
+                        json={"name": label[:-5],
+                              "answers": json.load(open(
+                                  os.path.join(FX, "payloads", label),
+                                  encoding="utf-8"))})
+
+    def suggest(paths):
+        files = [("decks", (os.path.basename(p), open(p, "rb").read()))
+                 for p in paths]
+        return client.post("/api/libraries/%s/suggest" % LIB, files=files).json()
+
+    every = [os.path.join(FX, "targets", f)
+             for f in sorted(os.listdir(os.path.join(FX, "targets")))
+             if f.endswith(".pptx")]
+
+    r = suggest(every)
+    check("suggest against correct rules finds nothing to do",
+          r["diff"] and r["diff"]["nothing_to_do"],
+          "%d rule(s) already match and are not repeated" % len(r["diff"]["settled"]))
+    check("and says so rather than restating them",
+          "Nothing to change" in r["markdown"]
+          and "quality" not in r["markdown"].split("## Nothing")[1],
+          "settled rules are counted, not listed")
+
+    # Drop one condition and it must come back as NEW, not buried in a re-listing
+    thinned = [dict(d, when=None) if d["id"] == "quality" else d for d in deck]
+    client.put("/api/libraries/%s/rules" % LIB,
+               json={"deck": thinned, "placeholders": ref["placeholders"]})
+    r = suggest(every)
+    new = [n["block"] for n in r["diff"]["new"]]
+    check("a missing condition is reported as new", new == ["quality"],
+          "new: %s — and %d settled rule(s) stay quiet"
+          % (new, len(r["diff"]["settled"])))
+
+    # Point a rule at the wrong field and it must be reported as a disagreement
+    wrong = [dict(d, when={"field": "City", "eq": "Boston"})
+             if d["id"] == "quality" else d for d in deck]
+    client.put("/api/libraries/%s/rules" % LIB,
+               json={"deck": wrong, "placeholders": ref["placeholders"]})
+    r = suggest(every)
+    changed = [c["block"] for c in r["diff"]["changed"]]
+    check("a wrong condition is reported as changed", changed == ["quality"],
+          "changed: %s" % changed)
+    check("and it shows both sides", "you have:" in r["markdown"]
+          and "these decks say:" in r["markdown"],
+          "yours and the evidence, side by side")
+
+    client.put("/api/libraries/%s/rules" % LIB,
+               json={"deck": deck, "placeholders": ref["placeholders"]})
+
     # 4 ------------------------------------- a wrong rule must be detectable
     broken = [d for d in deck if d["id"] != "quality"]
     client.put("/api/libraries/%s/rules" % LIB,

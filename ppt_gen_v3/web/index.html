@@ -149,11 +149,32 @@
       <div class="rulebar">
         <button class="btn primary" id="rules-save">Save rules</button>
         <span class="fld-note" id="rules-state">no changes yet</span>
+        <button class="btn" id="rules-suggest">Suggest from decks</button>
         <span style="flex:1"></span>
         <button class="btn" id="rules-history">Earlier versions</button>
         <button class="btn danger" id="rules-reset">Start the rules over</button>
       </div>
       <div class="pad" id="rules-panel" hidden></div>
+
+      <!-- Reads the decks and says what the rules should be. It applies
+           nothing: an author confirms each row against the screens, which is
+           the whole reason inference stopped being the mechanism. -->
+      <div class="pad" id="suggest-panel" hidden>
+        <div class="dropzone sm" id="sdrop"><div class="dz-icon">&#8681;</div>
+          <div class="dz-main">Drop the decks these rules should produce</div>
+          <div class="dz-sub">several at once, or
+            <button class="btn linky" id="pick-decks">choose files</button>
+            &mdash; each pairs with the answer set of the same name</div>
+        </div>
+        <div class="suggest-acts" id="suggest-acts" hidden>
+          <button class="btn" id="suggest-copy">Copy</button>
+          <button class="btn" id="suggest-download">Download .md</button>
+          <span class="fld-note" id="suggest-note"></span>
+          <span style="flex:1"></span>
+          <button class="btn" id="suggest-close">Close</button>
+        </div>
+        <div class="md" id="suggest-out"></div>
+      </div>
 
       <div class="deck" id="deck"></div>
     </div>

@@ -141,7 +141,7 @@ global.fetch = async (url) => {
 try {
   // app.js is strict mode, so its scope does not leak into ours. Ask for the
   // one function this file needs to test directly.
-  eval(js + "\n;globalThis.__readValue = readValue; globalThis.__formatted = formatted;");
+  eval(js + "\n;globalThis.__readValue = readValue; globalThis.__formatted = formatted; globalThis.__md = md;");
 } catch (err) {
   problems.push("the page threw while initialising: " + err.message);
 }
@@ -222,6 +222,26 @@ try {
     if (got !== v) problems.push(`date format ${k}: page says "${got}", engine says "${v}"`);
   }
   console.log("date formats: " + Object.keys(FORMATS).length + " checked against the engine");
+
+  // The suggestion report quotes field names and values that came out of the
+  // author's own files. Those are text, not markup, and must be escaped before
+  // any formatting is applied.
+  const MD = [
+    ["# Title", "<h1>Title</h1>", "heading"],
+    ["- one", "<ul><li>one</li></ul>", "list"],
+    ["`AuditType`", "<p><code>AuditType</code></p>", "inline code"],
+    ["**bold**", "<p><strong>bold</strong></p>", "bold"],
+    ["> careful", "<blockquote>careful</blockquote>", "blockquote"],
+    ["- `<script>alert(1)</script>`",
+     "<ul><li><code>&lt;script&gt;alert(1)&lt;/script&gt;</code></li></ul>",
+     "markup in a value is escaped, not run"],
+  ];
+  if (typeof globalThis.__md !== "function") problems.push("md() never got defined");
+  else for (const [src, want, why] of MD) {
+    const got = globalThis.__md(src);
+    if (got !== want) problems.push(`markdown ${why}: got ${got}, want ${want}`);
+  }
+  console.log("markdown: " + MD.length + " case(s) checked");
 
   console.log("\n" + calls.length + " API call(s): "
     + [...new Set(calls.map(u => u.split("?")[0]))].join(", "));
