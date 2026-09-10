@@ -135,6 +135,15 @@ main{padding:16px 18px 30vh}
 
 .thumb{display:block;border:1px solid var(--line);border-radius:4px;
   background:var(--thumb-bg)}
+/* The fills live here, not on the elements. `var()` is only resolved in CSS
+   declarations - in an SVG *presentation attribute* it is invalid and silently
+   ignored, which paints every shape the default black. That is what broke the
+   thumbnails when the palette was tokenised. */
+.thumb .sl-bg{fill:var(--thumb-bg)}
+.thumb .sl-band{fill:var(--thumb-band)}
+.thumb .sl-title{fill:var(--accent)}
+.thumb .sl-line{fill:var(--thumb-line)}
+.thumb .sl-ph{fill:var(--thumb-ph)}
 .thumb.sm{width:100px;min-width:100px}
 .thumb.xs{width:70px;min-width:70px}
 .thumb.lg{width:100%}
@@ -371,7 +380,6 @@ td.used{color:var(--muted);font-size:12.5px;white-space:nowrap}
   <button class="btn theme" id="theme-btn" title="Light / dark / follow the system">
     <span class="dot"></span><span id="theme-label">System</span></button>
   <span class="mock" id="source-badge">MOCKUP</span>
-  <button class="btn">Build test deck</button>
   <button class="btn" data-goto="check">Check against Templafy</button>
   <button class="btn primary">Save rules</button>
 </header>
@@ -705,13 +713,13 @@ function holds(when){
 
 function thumb(b, cls){
   const lines = [0.92,0.74,0.86,0.55].map((w,i) =>
-    `<rect x="8" y="${34+i*9}" width="${Math.round(128*w)}" height="4" rx="2" fill="var(--thumb-line)"/>`).join("");
+    `<rect class="sl-line" x="8" y="${34+i*9}" width="${Math.round(128*w)}" height="4" rx="2"/>`).join("");
   const t = b.t.length > 22 ? b.t.slice(0,21) + "…" : b.t;
   return `<svg class="thumb ${cls||''}" viewBox="0 0 144 81" role="img" aria-label="${esc(b.t)}">
-    <rect width="144" height="81" fill="var(--thumb-bg)"/>
-    <rect width="144" height="22" fill="var(--thumb-band)"/>
-    <text x="8" y="15" font-size="8" fill="var(--accent)" font-family="sans-serif">${esc(t)}</text>
-    ${lines}${b.ph.length ? '<rect x="8" y="70" width="46" height="5" rx="2.5" fill="var(--thumb-ph)"/>' : ''}
+    <rect class="sl-bg" width="144" height="81"/>
+    <rect class="sl-band" width="144" height="22"/>
+    <text class="sl-title" x="8" y="15" font-size="8" font-family="sans-serif">${esc(t)}</text>
+    ${lines}${b.ph.length ? '<rect class="sl-ph" x="8" y="70" width="46" height="5" rx="2.5"/>' : ''}
   </svg>`;
 }
 

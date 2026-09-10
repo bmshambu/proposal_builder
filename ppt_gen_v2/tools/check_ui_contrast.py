@@ -72,4 +72,20 @@ for theme_name, tokens in (("LIGHT", light), ("DARK", dark)):
               % (label, f, b, r, need, "ok" if ok else "FAIL"))
 
 print("\n%d failing pair(s)" % worst)
+
+# ------------------------------------------------------------------- lint
+# `var()` is resolved only in CSS declarations. In an SVG *presentation
+# attribute* it is invalid and silently ignored, so the shape paints default
+# black - which is exactly how tokenising the palette blanked every slide
+# thumbnail, with no error anywhere. Cheap to check, invisible to catch by eye.
+bad_attrs = re.findall(r'\b(fill|stroke|stop-color)="var\(', src)
+if bad_attrs:
+    print("\nvar() in %d SVG presentation attribute(s): %s"
+          % (len(bad_attrs), ", ".join(sorted(set(bad_attrs)))))
+    print("  Browsers ignore these and paint black. Put the fill in a CSS rule")
+    print("  and give the element a class instead.")
+    worst += len(bad_attrs)
+else:
+    print("no var() in SVG presentation attributes")
+
 sys.exit(1 if worst else 0)
