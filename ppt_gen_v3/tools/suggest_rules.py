@@ -36,7 +36,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
-from engine import Library                                        # noqa: E402
+from engine import Library, Template                              # noqa: E402
 from engine import forensics as pf                                # noqa: E402
 from engine.payloads import catalogue, load_payloads              # noqa: E402
 from engine.rules import flatten                                  # noqa: E402
@@ -51,8 +51,27 @@ def norm(value):
 
 # ------------------------------------------------------------ reading decks
 def read_library(path):
-    """-> ([block ids in order], {slide index: block id}, loaded deck)"""
-    with Library(path) as lib:
+    """-> ([block ids in order], {slide index: block id}, loaded deck)
+
+    Takes a template folder or a bare .pptx. The folder form matters more than
+    it looks: an imported library keeps its ids in a `blocks.json` beside the
+    deck, and opening the .pptx alone re-derives them from slide titles. The
+    names printed here would then be *almost* the names on screen, which is the
+    worst kind of wrong - every instruction reads plausible and none of them
+    can be followed.
+    """
+    block_map = None
+    if os.path.isdir(path):
+        tpl = Template(path)
+        path, block_map = tpl.library_path, tpl.raw_block_map
+    else:
+        sidecar = os.path.join(os.path.dirname(os.path.abspath(path)),
+                               "blocks.json")
+        if os.path.exists(sidecar):
+            with open(sidecar, encoding="utf-8") as fh:
+                block_map = json.load(fh)
+
+    with Library(path, block_map=block_map) as lib:
         order = [b.id for b in lib.ordered()]
     deck = pf.load_deck(path)
     if len(order) != len(deck["slides"]):
@@ -243,9 +262,13 @@ def guess_binding(placeholder, fields):
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--library", required=True, help="the master .pptx")
-    ap.add_argument("--decks", required=True,
-                    help="a target .pptx, or a folder of them")
+    ap.add_argument("--library", required=True,
+                    help="the master .pptx, or a template folder (which also "
+                         "picks up its blocks.json, so the ids match the UI)")
+    ap.add_argument("--decks", required=True, nargs="+",
+                    help="target decks: files, folders, or globs. Testing on a "
+                         "subset is normal, so `--decks data/decks/0*.pptx` "
+                         "works without moving anything")
     ap.add_argument("--payloads", help="folder of answer sets, named to match "
                                        "the decks")
     ap.add_argument("--json", help="also write the suggested rules.json here")
@@ -253,11 +276,21 @@ def main(argv=None):
 
     order, by_index, lib_deck = read_library(args.library)
 
-    targets = ([args.decks] if args.decks.lower().endswith(".pptx")
-               else sorted(glob.glob(os.path.join(args.decks, "*.pptx"))))
-    targets = [t for t in targets if not os.path.basename(t).startswith("~$")]
+    targets = []
+    for spec in args.decks:
+        if os.path.isdir(spec):
+            targets += sorted(glob.glob(os.path.join(spec, "*.pptx")))
+        elif any(c in spec for c in "*?["):
+            targets += sorted(glob.glob(spec))
+        else:
+            targets.append(spec)
+    # `~$name.pptx` is PowerPoint's lock file, present whenever a deck is open.
+    # It is not a deck, and reading it produces a baffling error.
+    targets = [t for t in dict.fromkeys(targets)
+               if t.lower().endswith(".pptx")
+               and not os.path.basename(t).startswith("~$")]
     if not targets:
-        raise SystemExit("no target decks in %s" % args.decks)
+        raise SystemExit("no target decks matched %s" % " ".join(args.decks))
 
     labels, orders, block_decks, weak = [], [], {}, []
     print("STEP 1 — Slides")
@@ -323,6 +356,22 @@ def main(argv=None):
 
     print("\n  Leave on \"always\" (%d, in every deck):" % len(always))
     print("    %s" % ", ".join(always) if always else "    (none)")
+
+    # "In every deck you gave me" is not "in every deck". If a field never
+    # varied across this subset, a slide it controls sits in all of them and
+    # looks permanent - which is the honest reading of this evidence and the
+    # wrong rule for the template. Testing on a handful of payloads is normal
+    # and this is exactly when it misleads.
+    fixed_here = [f for f, s in fields.items() if not s["varies"]] if fields else []
+    if fixed_here and always:
+        print("    ! \"every deck\" means these %d. %d field(s) never varied "
+              "here — %s —" % (len(all_decks), len(fixed_here),
+                               ", ".join(fixed_here[:3])
+                               + (" …" if len(fixed_here) > 3 else "")))
+        print("      so a slide one of them controls is in all of these decks "
+              "and looks permanent.")
+        print("      Add a deck that answers it differently before trusting "
+              "this list.")
 
     found, ambiguous, unexplained = ({}, {}, [])
     if payloads:
