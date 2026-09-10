@@ -26,7 +26,9 @@
     <button data-tab="questions">2 &middot; Questions</button>
     <button data-tab="rules">3 &middot; Rules</button>
     <button data-tab="mapping">4 &middot; Values</button>
-    <button data-tab="check">5 &middot; Check</button>
+    <!-- Comparing against Templafy is an action you take from wherever you
+         are, not a step in the sequence, so it lives on the button in the
+         header rather than as a fifth numbered tab. -->
     <span class="tabsplit"></span>
     <span class="role">anyone</span>
     <button data-tab="build">Build a deck</button>
@@ -162,6 +164,17 @@
   <div class="panel">
     <h2>Placeholders in the library <span class="count" id="map-count"></span>
       <span class="hint">the field list comes from the payloads - nothing is typed by hand</span></h2>
+
+    <!-- Values and rules live in one file, so this button writes both. Having
+         to cross to another screen to keep work done here is how bindings get
+         lost to a refresh. -->
+    <div class="rulebar">
+      <button class="btn primary" id="values-save">Save</button>
+      <span class="fld-note" id="values-state"></span>
+      <span style="flex:1"></span>
+      <span class="fld-note">values and rules are saved together &mdash; they are
+        one file</span>
+    </div>
     <div class="notice ok" id="map-note"></div>
     <table>
       <thead><tr><th>Placeholder</th><th>Used on</th><th>Comes from</th>

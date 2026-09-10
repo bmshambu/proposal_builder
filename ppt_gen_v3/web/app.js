@@ -183,6 +183,10 @@ function showTab(tab) {
     b.classList.toggle("on", b.dataset.tab === tab));
   document.querySelectorAll(".screen").forEach(s =>
     s.classList.toggle("on", s.id === "screen-" + tab));
+  // Check has no tab of its own any more, so the header button has to show
+  // that you are on it - otherwise nothing on screen says where you are.
+  document.querySelectorAll("[data-goto]").forEach(b =>
+    b.classList.toggle("here", b.dataset.goto === tab));
   $("testbar").hidden = tab !== "rules";
   fitMain();
 }
@@ -443,8 +447,7 @@ function renderDeck() {
   $("deck-count").textContent = `(${S.deck.length} slides, ${n} for these answers)`;
   $("tally").textContent = n;
   $("tally-off").textContent = off ? ` · ${off} excluded` : "";
-  $("rules-state").textContent = S.dirty ? "unsaved changes" : "saved";
-  $("rules-state").className = "fld-note" + (S.dirty ? " warn" : "");
+  renderSaveState();
 }
 
 const OPERATORS = [["eq", "is"], ["ne", "is not"], ["in", "is one of"],
@@ -525,7 +528,10 @@ function readValue(el) {
 }
 
 // -------------------------------------------------------- rules: persistence
-$("rules-save").onclick = async () => {
+/** One save, reachable from Rules and from Values. Both write the same file -
+ *  `rules.json` holds the deck and the bindings - so two handlers would be two
+ *  chances to send a different payload. */
+async function saveRules() {
   try {
     const r = await sendJSON(`/api/libraries/${S.lib}/rules`,
       { deck: S.deck, placeholders: S.bindings }, "PUT");
@@ -536,11 +542,27 @@ $("rules-save").onclick = async () => {
     if (c.removed.length) bits.push(`${c.removed.length} removed`);
     if (c.conditions.length) bits.push(`${c.conditions.length} condition(s) changed`);
     if (c.reordered) bits.push("reordered");
-    flash(c.nothing ? "Saved — nothing had changed"
-      : `Saved: ${bits.join(", ")}${r.backup ? ` (previous kept as ${r.backup})` : ""}`, "ok");
+    // `changed` describes the deck only. Saying "nothing changed" after
+    // someone edited a binding would be a lie about their own work.
+    flash(bits.length
+      ? `Saved: ${bits.join(", ")}${r.backup ? ` (previous kept as ${r.backup})` : ""}`
+      : `Saved${r.backup ? ` — previous kept as ${r.backup}` : ""}`, "ok");
+    renderSaveState();
     renderDeck();
   } catch (err) { flash(err.message, "bad"); }
-};
+}
+
+function renderSaveState() {
+  for (const id of ["rules-state", "values-state"]) {
+    const el = $(id);
+    if (!el) continue;
+    el.textContent = S.dirty ? "unsaved changes" : "saved";
+    el.className = "fld-note" + (S.dirty ? " warn" : "");
+  }
+}
+
+$("rules-save").onclick = saveRules;
+$("values-save").onclick = saveRules;
 
 $("rules-reset").onclick = async () => {
   if (!confirm(
@@ -552,7 +574,7 @@ $("rules-reset").onclick = async () => {
     const r = await sendJSON(`/api/libraries/${S.lib}/rules/reset`, {});
     S.deck = r.deck; S.bindings = r.placeholders; S.dirty = false;
     flash(`Rules reset — previous kept as ${r.backup || "(none)"}`, "ok");
-    renderRules(); renderMapping(); renderBuild();
+    renderRules(); renderMapping(); renderBuild(); renderSaveState();
   } catch (err) { flash(err.message, "bad"); }
 };
 
@@ -577,7 +599,7 @@ async function restore(file) {
     S.deck = r.deck; S.bindings = r.placeholders; S.dirty = false;
     $("rules-panel").hidden = true;
     flash(`Restored ${file}`, "ok");
-    renderRules(); renderMapping(); renderBuild();
+    renderRules(); renderMapping(); renderBuild(); renderSaveState();
   } catch (err) { flash(err.message, "bad"); }
 }
 
@@ -1079,7 +1101,7 @@ document.addEventListener("change", (e) => {
       S.bindings[key] = { ...bind, from: "literal", value: t.value };
     }
     S.dirty = true;
-    renderMapping(); renderDeck(); renderBuildResult();
+    renderMapping(); renderDeck(); renderBuildResult(); renderSaveState();
   }
 });
 

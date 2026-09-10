@@ -382,3 +382,5 @@ td.used{color:var(--muted);font-size:12.5px;white-space:nowrap}
 svg.thumb{height:auto}
 .btn:disabled{opacity:.45;cursor:not-allowed;border-color:var(--line);color:var(--muted)}
 .notice hr{border:none;border-top:1px solid currentColor;opacity:.2;margin:8px 0}
+.btn.here{background:var(--accent-soft);border-color:var(--accent-line);
+  color:var(--accent);font-weight:600}
