@@ -5,3 +5,6 @@ templates/*/
 !templates/demo/
 *.bak
 __pycache__/
+
+# PowerPoint's lock files - present whenever a deck is open
+~$*

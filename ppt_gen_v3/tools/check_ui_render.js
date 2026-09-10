@@ -135,7 +135,9 @@ global.fetch = async (url) => {
 
 // ------------------------------------------------------------------ run it
 try {
-  eval(js);
+  // app.js is strict mode, so its scope does not leak into ours. Ask for the
+  // one function this file needs to test directly.
+  eval(js + "\n;globalThis.__readValue = readValue;");
 } catch (err) {
   problems.push("the page threw while initialising: " + err.message);
 }
@@ -176,6 +178,26 @@ try {
     if (/undefined|\[object Object\]|NaN/.test(box.innerHTML || ""))
       problems.push(`${id} rendered undefined/[object Object]/NaN`);
   }
+  // The <option> values are JSON so a boolean survives. Reading them back by
+  // guessing left every string wrapped in its own quotes, so a saved condition
+  // read `AuditType is "\"New Audit Client\""` and matched nothing - the deck
+  // silently lost a slide. Typed input must stay literal, or `null` in a text
+  // box becomes a null.
+  const cases = [
+    [{ dataset: { json: "" }, value: '"New Audit Client"' }, "New Audit Client", "JSON string unwrapped"],
+    [{ dataset: { json: "" }, value: "false" }, false, "JSON false stays a boolean"],
+    [{ dataset: { json: "" }, value: "true" }, true, "JSON true stays a boolean"],
+    [{ dataset: {}, value: "New York" }, "New York", "typed text is literal"],
+    [{ dataset: {}, value: "null" }, "null", "typed 'null' is a string, not null"],
+    [{ dataset: { date: "" }, value: "2026-11-30" }, "20261130", "date stored as the payload holds it"],
+  ];
+  for (const [el, want, why] of cases) {
+    const got = globalThis.__readValue(el);
+    if (got !== want)
+      problems.push(`readValue: ${why} — got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
+  }
+  console.log("readValue: " + cases.length + " case(s) checked");
+
   console.log("\n" + calls.length + " API call(s): "
     + [...new Set(calls.map(u => u.split("?")[0]))].join(", "));
 

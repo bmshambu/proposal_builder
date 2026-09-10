@@ -44,6 +44,8 @@ sys.path.insert(0, HERE)
 
 from engine import (Rules, Template, build_template,               # noqa: E402
                     find_template, import_deck, list_templates)
+from engine import bindings                                        # noqa: E402
+from engine.rules import flatten                                   # noqa: E402
 from engine import payloads as payloadsmod                         # noqa: E402
 from engine import svg as svgmod                                   # noqa: E402
 from engine.template import TemplateError                          # noqa: E402
@@ -327,13 +329,39 @@ def selection(tpl: Template, answers: dict) -> dict:
     with tpl.open_library() as lib:
         titles = {b.id: b.title for b in lib.ordered()}
         phs = {b.id: sorted(b.placeholders) for b in lib.ordered()}
-    bound = {p.strip("{} ") for p in rules.placeholders}
     used: set = set()
     for _bid, sid in chosen:
         used.update(phs.get(sid) or [])
+
+    # Actually resolve, rather than checking a binding merely exists. A starter
+    # binding points {{ClientName}} at a field called `ClientName`; the payload
+    # calls it `FullClientName`, so the binding is present, wrong, and silent -
+    # the deck ships with {{ClientName}} printed on the cover and nothing said
+    # so. "Bound" is not the question; "produces a value" is.
+    values, _unresolved = bindings.resolve(rules.placeholders, answers,
+                                           tpl.data_sources())
+    flat = flatten(answers)
+
+    # Two different problems, and telling them apart is the whole point.
+    # A binding aimed at a field nobody answers is the AUTHOR's mistake and
+    # will be wrong for everyone. A field that exists but was left blank is
+    # this USER's answer, and is often perfectly deliberate.
+    unbound, empty = [], []
+    for p in sorted(used):
+        if values.get(p) not in (None, "", [], {}):
+            continue
+        spec = rules.placeholders.get("{{%s}}" % p)
+        if not isinstance(spec, dict):
+            unbound.append(p)
+        elif spec.get("from") == "field" and spec.get("field") not in flat:
+            unbound.append(p)
+        else:
+            empty.append(p)
+
     return {"slides": [{"block": bid, "slide": sid, "title": titles.get(sid, sid)}
                        for bid, sid in chosen],
-            "count": len(chosen), "unbound": sorted(used - bound), "trace": trace}
+            "count": len(chosen), "unbound": unbound, "empty": empty,
+            "trace": trace}
 
 
 async def take_upload(upload: UploadFile, suffix: str, folder: str) -> str:
@@ -534,6 +562,7 @@ def post_build(body: Answers, tpl: Template = Depends(library)):
     token = os.urandom(8).hex()
     build_template(tpl, body.answers, os.path.join(BUILDS, token + ".pptx"))
     return {"token": token, "slides": sel["count"], "unbound": sel["unbound"],
+            "empty": sel["empty"],
             "download": "/download/%s" % token,
             "filename": "%s.pptx" % os.path.basename(tpl.folder)}
 

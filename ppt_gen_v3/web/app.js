@@ -437,8 +437,12 @@ function valueControl(field, op, current) {
     return `<input type="date" data-v data-date value="${esc(toISO(current))}">
             <span class="preview">${esc(humanDate(current) || "pick a date")}</span>`;
   const vals = spec.values || [];
+  // The option values are JSON so that `false` stays a boolean rather than
+  // becoming the string "false". `data-json` says so, because a reader that
+  // guesses will unwrap booleans and leave strings wrapped in their quotes -
+  // which is a condition that can never match anything.
   if (vals.length && vals.length <= 12)
-    return `<select data-v>${vals.map(v =>
+    return `<select data-v data-json>${vals.map(v =>
       `<option value="${esc(JSON.stringify(v))}"${JSON.stringify(v) === JSON.stringify(current)
         ? " selected" : ""}>${esc(v)}</option>`).join("")}</select>`;
   if (vals.length)
@@ -485,10 +489,16 @@ function editorHTML(row) {
     </div></div>`;
 }
 
-const parseVal = (raw) => {
-  try { const v = JSON.parse(raw); return typeof v === "boolean" ? v : raw; }
-  catch (_) { return raw; }
-};
+/** A control that says its value is JSON gets parsed; anything else is taken
+ *  literally. Guessing was the bug: unwrapping only booleans left every string
+ *  wrapped in its own quotes, so `AuditType is "New Audit Client"` was really
+ *  `AuditType is "\"New Audit Client\""` and matched nothing. Typed input has
+ *  to stay literal too, or someone typing `null` in a text box gets a null. */
+function readValue(el) {
+  if (el.dataset.date !== undefined) return fromISO(el.value);
+  if (el.dataset.json === undefined) return el.value;
+  try { return JSON.parse(el.value); } catch (_) { return el.value; }
+}
 
 // -------------------------------------------------------- rules: persistence
 $("rules-save").onclick = async () => {
@@ -663,12 +673,25 @@ async function renderBuildResult() {
   $("build-list").innerHTML = sel.slides.map((s, i) =>
     `<div class="bl"><span class="n">${i + 1}</span>
       <span class="t" title="${esc(s.block)}">${esc(s.title)}</span></div>`).join("");
+  // Two different problems with two different owners. A binding aimed at a
+  // field nobody answers is broken for everyone and belongs to the author; a
+  // field left blank is this user's answer and is often deliberate. Showing
+  // them the same way sends the wrong person looking.
   const warn = $("build-warn");
   warn.innerHTML = sel.unbound.length
-    ? `<b>${sel.unbound.length} placeholder(s) in these slides are not bound</b>
-       The deck will show ${sel.unbound.slice(0, 3).map(p => "{{" + esc(p) + "}}").join(", ")}
-       as literal text. An author has to fix this on the Mapping screen.` : "";
+    ? `<b>${sel.unbound.length} placeholder(s) will print as literal text</b>
+       ${sel.unbound.map(p => "{{" + esc(p) + "}}").join(", ")} —
+       either nothing is bound, or the binding names a field the answers do not
+       contain. Fix it on the Mapping screen.` : "";
   warn.hidden = !sel.unbound.length;
+
+  const note = $("build-empty");
+  const empty = sel.empty || [];
+  note.innerHTML = empty.length
+    ? `<b>${empty.length} placeholder(s) resolve to nothing</b>
+       ${empty.map(p => "{{" + esc(p) + "}}").join(", ")} — bound correctly, but
+       these answers leave them blank. Often intended; worth a look.` : "";
+  note.hidden = !empty.length;
 }
 
 function invalidateBuild() {
@@ -899,8 +922,7 @@ document.addEventListener("click", (e) => {
       if (op === "exists") row.when = { field, exists: true };
       else if (op === "in" || op === "not_in")
         row.when = { field, [op]: v.value.split(",").map(s => s.trim()).filter(Boolean) };
-      else if (v.dataset.date !== undefined) row.when = { field, [op]: fromISO(v.value) };
-      else row.when = { field, [op]: parseVal(v.value) };
+      else row.when = { field, [op]: readValue(v) };
     }
     S.editing = null; S.dirty = true;
   }

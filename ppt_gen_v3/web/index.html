@@ -33,7 +33,7 @@
   <span class="spacer"></span>
   <button class="btn theme" id="theme-btn" title="Light / dark / follow the system">
     <span class="dot"></span><span id="theme-label">System</span></button>
-  <span class="mock" id="source-badge">MOCKUP</span>
+  <span class="mock" id="source-badge"></span>
   <!-- Save lives with the deck it saves, on the Rules screen. A second one up
        here would be a save button that is visible while looking at something
        else entirely. -->
@@ -64,11 +64,11 @@
            tidied up later. -->
       <div class="naming">
         <label class="fld"><span>Save this library as</span>
-          <input type="text" id="lib-name" value="public_audit"
+          <input type="text" id="lib-name" value=""
                  placeholder="short_name_no_spaces"></label>
         <label class="fld wide"><span>Description</span>
-          <input type="text" id="lib-desc"
-                 value="The live template, harvested from 70 decks"></label>
+          <input type="text" id="lib-desc" value=""
+                 placeholder="what this library is for"></label>
         <div class="fld-note" id="name-note"></div>
       </div>
       <div class="current" id="current"></div>
@@ -167,10 +167,7 @@
       </div>
       <div class="pair-acts">
         <button class="btn primary" id="run-check">Compare</button>
-        <span class="or">or</span>
-        <button class="btn">Run the whole set &mdash; every payload and its deck</button>
-        <span class="hint2" id="sample-wrap">showing a sample result:
-          <select id="sample"></select></span>
+        <span class="hint2">both files are read on this machine and neither is kept</span>
       </div>
     </div>
   </div>
@@ -213,6 +210,7 @@
       <h2>What you will get <span class="count" id="build-count"></span>
         <span class="hint">recalculated as you answer</span></h2>
       <div class="notice bad" id="build-warn"></div>
+      <div class="notice warn" id="build-empty"></div>
       <div class="buildlist" id="build-list"></div>
       <div class="buildfoot">
         <button class="btn primary" id="build-go">Build the deck</button>

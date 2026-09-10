@@ -62,6 +62,24 @@ def main():
           "LeadPartner" in insp["placeholders"],
           "{{Lead}}{{Partner}} across runs is still one placeholder")
 
+    # A placeholder whose binding names a field that does not exist is bound,
+    # wrong, and silent: import_deck guesses {{ClientName}} -> field
+    # `ClientName`, while the payload calls it `FullClientName`. The deck ships
+    # with {{ClientName}} on the cover and nothing warns. "Bound" is not the
+    # question; "produces a value" is.
+    ref0 = json.load(open(os.path.join(FX, "reference_rules.json"),
+                          encoding="utf-8"))
+    deck0 = [{"id": b, "when": None if ref0["blocks"][b]["when"] == "always"
+              else ref0["blocks"][b]["when"]} for b in ref0["baseline"]]
+    client.put("/api/libraries/%s/rules" % LIB, json={"deck": deck0})
+    a0 = json.load(open(os.path.join(FX, "payloads", "p1_new_client.json"),
+                        encoding="utf-8"))
+    starter = client.post("/api/libraries/%s/select" % LIB,
+                          json={"answers": a0}).json()
+    check("a binding to a missing field is reported", starter["unbound"],
+          "%d would print as literal text: %s"
+          % (len(starter["unbound"]), ", ".join(starter["unbound"][:3])))
+
     # 2 ------------------------------------------------------- set the rules
     ref = json.load(open(os.path.join(FX, "reference_rules.json"),
                          encoding="utf-8"))
@@ -89,8 +107,12 @@ def main():
         check("build %s" % name, r.status_code == 200 and built["slides"],
               "%d slides, %d unbound placeholder(s)"
               % (built["slides"], len(built["unbound"])))
-        check("%s leaves no placeholder unbound" % name, not built["unbound"],
-              ", ".join(built["unbound"]) or "every value resolved")
+        check("%s has no broken binding" % name, not built["unbound"],
+              ", ".join(built["unbound"]) or "every binding names a real field")
+        if built.get("empty"):
+            check("%s reports its blank answers" % name, True,
+                  "%s left blank by this payload — reported, not called an error"
+                  % ", ".join(built["empty"]))
 
         blob = client.get(built["download"]).content
         target = os.path.join(FX, "targets", name + ".pptx")
