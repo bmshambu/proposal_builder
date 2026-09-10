@@ -265,6 +265,7 @@ main{padding:16px 18px 30vh}
 /* ----------------------------------------------------------- libraries */
 .libpick{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:7px}
 .libpick select{font-weight:600;color:var(--ink);max-width:250px}
+.libmeta{color:var(--off);white-space:nowrap}
 .tabsplit{width:1px;height:20px;background:var(--line);margin:0 6px}
 .role{font-size:10px;text-transform:uppercase;letter-spacing:.07em;
   color:var(--off);align-self:center;margin-right:2px}
@@ -364,7 +365,8 @@ td.used{color:var(--muted);font-size:12.5px;white-space:nowrap}
        than on each screen because it is context, not a setting: the answer to
        "which library am I editing" must never be more than a glance away. -->
   <label class="libpick">Library
-    <select id="library"></select></label>
+    <select id="library"></select>
+    <span class="libmeta" id="hdr-count"></span></label>
 
   <nav class="tabs">
     <span class="role">author</span>
@@ -642,6 +644,12 @@ let BINDINGS = {
   FeeYearEnd: {from:"data", source:"finance", key:"year_end"},
   FeeTotal:   {from:"data", source:"finance", key:"total"},
 };
+
+/* Whole payloads for one-click loading. Declared here with the rest of the
+   data, not beside the control that first used it: two screens load presets
+   now, and a `const` used above its declaration is a dead-zone error that
+   takes the entire page down, not a warning. */
+const PRESETS = DATA.presets || [];
 
 let ANSWERS = {};
 let EDITING = null;
@@ -1265,7 +1273,6 @@ document.getElementById("inputs-toggle").onclick = function(){
 };
 
 /* -------------------------------------------------------- preset answers */
-const PRESETS = DATA.presets || [];
 (function(){
   const wrap = document.getElementById("preset-wrap");
   if(!PRESETS.length){ wrap.hidden = true; return; }
