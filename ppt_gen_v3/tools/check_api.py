@@ -72,6 +72,53 @@ def main():
     check("insert_after read as a flat order", bool(conds),
           json.dumps(conds[0]) if conds else "no conditions found")
 
+    # ------------------------------------------------- reset and restore
+    # Run before anything that depends on the demo's authored rules, and put
+    # them back at the end - a check that leaves the fixture altered is a
+    # check you can only run once.
+    original = json.load(open(os.path.join(demo, "rules.json"), encoding="utf-8"))
+
+    r = client.post("/api/libraries/demo/rules/reset", json={})
+    reset = r.json()
+    check("POST /rules/reset", r.status_code == 200,
+          "%d rows, backup %s" % (len(reset["deck"]), reset["backup"]))
+    check("reset clears every condition",
+          all(row["when"] is None for row in reset["deck"]),
+          "every slide always included, library order")
+    check("reset keeps the bindings by default",
+          len(reset["placeholders"]) == len(original.get("placeholders", {})),
+          "%d binding(s) survived" % len(reset["placeholders"]))
+    check("reset says what it changed", not reset["changed"]["nothing"],
+          "conditions: %s" % (reset["changed"]["conditions"] or "-"))
+
+    backups = client.get("/api/libraries/demo/rules/backups").json()
+    check("GET /rules/backups", backups and backups[0]["file"].endswith(".bak"),
+          "%d version(s), newest %s" % (len(backups), backups[0]["when"]))
+
+    r = client.post("/api/libraries/demo/rules/restore",
+                    json={"backup": backups[0]["file"]})
+    restored = r.json()
+    check("POST /rules/restore", r.status_code == 200,
+          "%d rows back" % len(restored["deck"]))
+    check("restore actually brings the conditions back",
+          any(row["when"] for row in restored["deck"]),
+          "reset is recoverable, not final")
+
+    r = client.post("/api/libraries/demo/rules/restore",
+                    json={"backup": "../../../etc/passwd"})
+    check("restore refuses a path", r.status_code == 400,
+          r.json().get("detail", "")[:44])
+    r = client.post("/api/libraries/demo/rules/restore",
+                    json={"backup": "rules.json.19990101-000000.bak"})
+    check("restore refuses a missing backup", r.status_code == 404,
+          r.json().get("detail", "")[:44])
+
+    now = json.load(open(os.path.join(demo, "rules.json"), encoding="utf-8"))
+    check("the demo template is back as it was",
+          now.get("baseline") == original.get("baseline")
+          and now.get("blocks") == original.get("blocks"),
+          "restore round-tripped the fixture")
+
     # ---------------------------------------------------------- selection
     exp = json.load(open(os.path.join(demo, "answers.expansion.json"),
                          encoding="utf-8"))

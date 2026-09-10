@@ -1,5 +1,6 @@
 """WCAG contrast for every text/background pair the two themes actually use."""
 import io
+import os
 import re
 import sys
 
@@ -28,8 +29,18 @@ def ratio(a, b):
     return (hi + 0.05) / (lo + 0.05)
 
 
-src = io.open(sys.argv[1], encoding="utf-8").read()
-style = src[src.index("<style>"):src.index("</style>")]
+# Takes any mix of .html, .css and .js. The tokens are read from whichever
+# input carries them - an inline <style> or a stylesheet - and the SVG lint
+# reads all of them, because markup and the JS that generates it can both put
+# a fill on an element.
+paths = sys.argv[1:] or ["web/app.css", "web/index.html", "web/app.js"]
+paths = [p for p in paths if os.path.exists(p)]
+if not paths:
+    sys.exit("nothing to check: %s" % ", ".join(sys.argv[1:]))
+src = "\n".join(io.open(p, encoding="utf-8").read() for p in paths)
+style = (src[src.index("<style>"):src.index("</style>")]
+         if "<style>" in src and "</style>" in src else src)
+print("checking: %s" % ", ".join(paths))
 
 light = parse(style[style.index(":root{"):style.index("}", style.index(":root{"))])
 dstart = style.index(':root[data-theme="dark"]{')

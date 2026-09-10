@@ -103,6 +103,19 @@
     <div class="panel">
       <h2>Deck order <span class="count" id="deck-count"></span>
         <span class="hint">drag to reorder &middot; click a condition to edit it</span></h2>
+
+      <!-- Reset and history sit with the deck, not in the header: they act on
+           these rules, and a destructive action belongs next to the thing it
+           destroys. Both back up first, so neither is final. -->
+      <div class="rulebar">
+        <button class="btn primary" id="rules-save">Save rules</button>
+        <span class="fld-note" id="rules-state">no changes yet</span>
+        <span style="flex:1"></span>
+        <button class="btn" id="rules-history">Earlier versions</button>
+        <button class="btn danger" id="rules-reset">Start the rules over</button>
+      </div>
+      <div class="pad" id="rules-panel" hidden></div>
+
       <div class="deck" id="deck"></div>
     </div>
   </div>

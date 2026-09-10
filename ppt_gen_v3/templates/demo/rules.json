@@ -1,44 +1,117 @@
 {
   "name": "Demo audit proposal",
   "library": "library.pptx",
-
   "_comment": "baseline is the spine of the deck at default answers, in order. Conditional blocks live in `blocks` with a `when` and an `insert_after`. A `variant` swaps a block's content without moving it.",
-
-  "baseline": ["cover", "about_us", "our_team", "approach", "scope", "fees", "contacts"],
-
+  "baseline": [
+    "cover",
+    "about_us",
+    "our_team",
+    "approach",
+    "scope",
+    "fees",
+    "contacts"
+  ],
   "blocks": {
-    "cover":     { "slides": ["cover"],     "when": "always" },
-    "about_us":  { "slides": ["about_us"],  "when": "always" },
-    "our_team":  { "slides": ["our_team"],  "when": "always" },
-    "approach":  { "slides": ["approach"],  "when": "always" },
-    "fees":      { "slides": ["fees"],      "when": "always" },
-    "contacts":  { "slides": ["contacts"],  "when": "always" },
-
+    "cover": {
+      "slides": [
+        "cover"
+      ],
+      "when": "always"
+    },
+    "about_us": {
+      "slides": [
+        "about_us"
+      ],
+      "when": "always"
+    },
+    "our_team": {
+      "slides": [
+        "our_team"
+      ],
+      "when": "always"
+    },
+    "approach": {
+      "slides": [
+        "approach"
+      ],
+      "when": "always"
+    },
+    "fees": {
+      "slides": [
+        "fees"
+      ],
+      "when": "always"
+    },
+    "contacts": {
+      "slides": [
+        "contacts"
+      ],
+      "when": "always"
+    },
     "scope": {
-      "slides": ["scope"],
+      "slides": [
+        "scope"
+      ],
       "when": "always",
       "variant": {
-        "when": { "field": "AuditType", "eq": "Expansion of Services" },
-        "slides": ["scope_expansion"]
+        "when": {
+          "field": "AuditType",
+          "eq": "Expansion of Services"
+        },
+        "slides": [
+          "scope_expansion"
+        ]
       }
     },
-
     "expansion_detail": {
-      "slides": ["expansion_detail"],
-      "when": { "field": "AuditType", "eq": "Expansion of Services" },
+      "slides": [
+        "expansion_detail"
+      ],
+      "when": {
+        "field": "AuditType",
+        "eq": "Expansion of Services"
+      },
       "insert_after": "approach"
     }
   },
-
   "placeholders": {
-    "{{ClientName}}":  { "from": "field", "field": "FullClientName" },
-    "{{DueDate}}":     { "from": "field", "field": "DueDate", "format": "long_comma" },
-    "{{City}}":        { "from": "field", "field": "City" },
-
-    "{{LeadPartner}}": { "from": "data", "source": "profile", "key": "lead_partner" },
-    "{{FeePlanning}}": { "from": "data", "source": "finance", "key": "planning" },
-    "{{FeeInterim}}":  { "from": "data", "source": "finance", "key": "interim" },
-    "{{FeeYearEnd}}":  { "from": "data", "source": "finance", "key": "year_end" },
-    "{{FeeTotal}}":    { "from": "data", "source": "finance", "key": "total" }
+    "{{ClientName}}": {
+      "from": "field",
+      "field": "FullClientName"
+    },
+    "{{DueDate}}": {
+      "from": "field",
+      "field": "DueDate",
+      "format": "long_comma"
+    },
+    "{{City}}": {
+      "from": "field",
+      "field": "City"
+    },
+    "{{LeadPartner}}": {
+      "from": "data",
+      "source": "profile",
+      "key": "lead_partner"
+    },
+    "{{FeePlanning}}": {
+      "from": "data",
+      "source": "finance",
+      "key": "planning"
+    },
+    "{{FeeInterim}}": {
+      "from": "data",
+      "source": "finance",
+      "key": "interim"
+    },
+    "{{FeeYearEnd}}": {
+      "from": "data",
+      "source": "finance",
+      "key": "year_end"
+    },
+    "{{FeeTotal}}": {
+      "from": "data",
+      "source": "finance",
+      "key": "total"
+    }
   }
 }

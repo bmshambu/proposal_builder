@@ -157,6 +157,26 @@ main{padding:16px 18px 30vh}
 .add{border:1px solid var(--line);background:var(--panel);border-radius:5px;
   width:24px;min-width:24px;height:24px;line-height:1;color:var(--accent)}
 
+/* Save on the left where the eye starts, destructive actions on the right,
+   separated by space rather than by a warning colour alone. */
+.rulebar{display:flex;align-items:center;gap:10px;padding:10px 14px;
+  border-bottom:1px solid var(--line);flex-wrap:wrap}
+.btn.danger{color:var(--bad);border-color:var(--bad-line)}
+.btn.danger:hover{background:var(--bad-soft);border-color:var(--bad);
+  color:var(--bad)}
+.vlist{display:flex;flex-direction:column;gap:6px}
+.vrow{display:flex;align-items:center;gap:10px;font-size:12.5px;
+  border:1px solid var(--line);border-radius:6px;padding:7px 10px;
+  background:var(--panel-2)}
+.vrow .w{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+.vrow .sp{flex:1}
+.confirm{border:1px solid var(--bad-line);background:var(--bad-soft);
+  border-radius:6px;padding:11px 13px;font-size:13px;color:var(--bad)}
+.confirm b{display:block;margin-bottom:3px}
+.confirm .acts{margin-top:10px;display:flex;gap:8px;align-items:center}
+.confirm label{color:var(--ink);font-size:12.5px;display:flex;align-items:center;
+  gap:6px}
+
 .deck{padding:8px 10px;min-height:120px}
 .row{display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:6px;
   border:1px solid transparent}

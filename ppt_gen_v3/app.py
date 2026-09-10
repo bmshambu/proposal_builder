@@ -81,6 +81,17 @@ class SaveRules(BaseModel):
     placeholders: Optional[Dict[str, Any]] = None
 
 
+class ResetRules(BaseModel):
+    # Bindings are about values, not slide selection, and rebuilding them by
+    # hand is the expensive half. Keeping them is the safe default; clearing
+    # them has to be asked for.
+    keep_bindings: bool = True
+
+
+class RestoreRules(BaseModel):
+    backup: str
+
+
 class Answers(BaseModel):
     answers: Dict[str, Any] = Field(default_factory=dict)
 
@@ -215,6 +226,79 @@ def diff_decks(before: List[dict], after: List[dict]) -> dict:
     return {"added": added, "removed": removed, "conditions": changed,
             "reordered": reordered,
             "nothing": not (added or removed or changed or reordered)}
+
+
+def write_rules(tpl: Template, spec: dict) -> Optional[str]:
+    """Back up, then write. Every path that changes rules.json comes through here.
+
+    Save, reset and restore all overwrite the same file, so the backup cannot
+    live in one of them - the one that skipped it would be the one that lost
+    the work. -> the backup's filename, or None if there was nothing to back up.
+    """
+    with WRITE_LOCK:
+        backup = None
+        if os.path.exists(tpl.rules_path):
+            backup = "%s.%s.bak" % (tpl.rules_path, time.strftime("%Y%m%d-%H%M%S"))
+            shutil.copy(tpl.rules_path, backup)
+        with open(tpl.rules_path, "w", encoding="utf-8") as fh:
+            json.dump(spec, fh, indent=2, ensure_ascii=False)
+            fh.write("\n")
+    return os.path.basename(backup) if backup else None
+
+
+def starter_rules(tpl: Template, keep_bindings: bool = True) -> dict:
+    """What a freshly imported library gets: every slide, in the deck's order.
+
+    The same thing `import_deck` writes, so "reset" and "just imported" mean
+    the same thing rather than two nearly-identical shapes.
+    """
+    existing = read_rules(tpl) if os.path.exists(tpl.rules_path) else {}
+    with tpl.open_library() as lib:
+        order = [b.id for b in lib.ordered()]
+        found = sorted(lib.all_placeholders())
+
+    if keep_bindings and existing.get("placeholders"):
+        # Bindings are about *values*, not selection, and they are the
+        # expensive half to recreate. Keep them across a reset unless asked
+        # otherwise; `inspect` already reports any that no longer match a
+        # slide, so a stale one is visible rather than silent.
+        bindings = dict(existing["placeholders"])
+        for p in found:
+            bindings.setdefault("{{%s}}" % p, {"from": "field", "field": p})
+    else:
+        bindings = {("{{%s}}" % p): {"from": "field", "field": p} for p in found}
+
+    return {
+        "name": existing.get("name") or tpl.name,
+        "library": existing.get("library") or os.path.basename(tpl.library_path),
+        "_comment": "Reset to the starter: every slide, in the library's own "
+                    "order, always included. Narrow it by giving rows a "
+                    "condition, or drag them out of the deck.",
+        "baseline": order,
+        "blocks": {bid: {"slides": [bid], "when": "always"} for bid in order},
+        "placeholders": bindings,
+    }
+
+
+def list_backups(tpl: Template) -> List[dict]:
+    """Every kept version of this library's rules, newest first."""
+    folder = os.path.dirname(tpl.rules_path)
+    stem = os.path.basename(tpl.rules_path)
+    out = []
+    for name in os.listdir(folder):
+        if not (name.startswith(stem + ".") and name.endswith(".bak")):
+            continue
+        path = os.path.join(folder, name)
+        stamp = name[len(stem) + 1:-4]
+        try:
+            with open(path, encoding="utf-8") as fh:
+                spec = json.load(fh)
+            slides = len(rules_as_deck(spec))
+        except Exception:
+            slides = None
+        out.append({"file": name, "when": stamp, "slides": slides,
+                    "bytes": os.path.getsize(path)})
+    return sorted(out, key=lambda b: b["when"], reverse=True)
 
 
 def selection(tpl: Template, answers: dict) -> dict:
@@ -352,17 +436,67 @@ def put_rules(body: SaveRules, tpl: Template = Depends(library)):
                                  + "; ".join(problems))
 
     change = diff_decks(rules_as_deck(existing), rows)
-    with WRITE_LOCK:
-        backup = None
-        if os.path.exists(tpl.rules_path):
-            backup = "%s.%s.bak" % (tpl.rules_path,
-                                    time.strftime("%Y%m%d-%H%M%S"))
-            shutil.copy(tpl.rules_path, backup)
-        with open(tpl.rules_path, "w", encoding="utf-8") as fh:
-            json.dump(spec, fh, indent=2, ensure_ascii=False)
-            fh.write("\n")
     return {"saved": True, "changed": change,
-            "backup": os.path.basename(backup) if backup else None}
+            "backup": write_rules(tpl, spec)}
+
+
+@app.post("/api/libraries/{lib}/rules/reset", tags=["rules"])
+def post_reset(body: ResetRules = ResetRules(),
+               tpl: Template = Depends(library)):
+    """Start the rules over: every slide, library order, no conditions.
+
+    The state a freshly imported library is in — which is what you want while
+    trying a new library, when the rules on screen describe a different deck.
+
+    It backs up first, like every other write, so "reset" is recoverable rather
+    than final. Bindings survive by default: they are about values, not
+    selection, and they are the expensive half to rebuild.
+    """
+    before = rules_as_deck(read_rules(tpl))
+    spec = starter_rules(tpl, keep_bindings=body.keep_bindings)
+    backup = write_rules(tpl, spec)
+    after = rules_as_deck(spec)
+    return {"reset": True, "backup": backup,
+            "deck": after, "placeholders": spec["placeholders"],
+            "changed": diff_decks(before, after),
+            "kept_bindings": body.keep_bindings}
+
+
+@app.get("/api/libraries/{lib}/rules/backups", tags=["rules"])
+def get_backups(tpl: Template = Depends(library)):
+    """Every kept version, newest first. Nothing here is deleted automatically."""
+    return list_backups(tpl)
+
+
+@app.post("/api/libraries/{lib}/rules/restore", tags=["rules"])
+def post_restore(body: RestoreRules, tpl: Template = Depends(library)):
+    """Put a previous version of the rules back.
+
+    Validated exactly like a save. A backup taken against a *different* library
+    can name slides that no longer exist, and restoring it would leave a
+    rules.json that cannot build — so it is refused with the reason, and reset
+    is the way out.
+    """
+    if "/" in body.backup or "\\" in body.backup or not body.backup.endswith(".bak"):
+        raise HTTPException(400, "not a backup name: %r" % body.backup)
+    path = os.path.join(os.path.dirname(tpl.rules_path), body.backup)
+    if not os.path.isfile(path):
+        raise HTTPException(404, "no such backup: %s" % body.backup)
+    with open(path, encoding="utf-8") as fh:
+        spec = json.load(fh)
+
+    with tpl.open_library() as lib:
+        problems = Rules(spec, source=body.backup).check_against(lib)
+    if problems:
+        raise HTTPException(422, "that version does not fit this library: "
+                                 + "; ".join(problems)
+                                 + " — reset the rules instead")
+
+    before = rules_as_deck(read_rules(tpl))
+    after = rules_as_deck(spec)
+    return {"restored": body.backup, "backup": write_rules(tpl, spec),
+            "deck": after, "placeholders": spec.get("placeholders") or {},
+            "changed": diff_decks(before, after)}
 
 
 @app.post("/api/libraries/{lib}/select", tags=["build"])
