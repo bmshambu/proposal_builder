@@ -290,6 +290,22 @@
     </div>
 
   </div>
+
+  <!-- The built deck, not the library. It shows what selection produced and
+       what every placeholder became - the only version anyone receives.
+       Downloading and opening PowerPoint to find a stray {{...}} is a slow way
+       to learn something the screen can say. -->
+  <div class="panel" id="viewer-panel" hidden>
+    <h2>The deck you just built <span class="count" id="viewer-count"></span>
+      <span class="hint">rendered from the file itself &middot; arrow keys to
+        move</span></h2>
+    <div class="viewer">
+      <button class="nav" id="viewer-prev" title="Previous slide">&#8249;</button>
+      <div class="stage" id="viewer-stage"></div>
+      <button class="nav" id="viewer-next" title="Next slide">&#8250;</button>
+    </div>
+    <div class="filmstrip" id="viewer-strip"></div>
+  </div>
 </section>
 
 </main>

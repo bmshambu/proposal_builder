@@ -403,3 +403,27 @@ svg.thumb{height:auto}
 .md blockquote{margin:8px 0;padding:9px 12px;border-left:3px solid var(--warn);
   background:var(--warn-soft);color:var(--warn);font-size:12.5px;border-radius:0 6px 6px 0}
 .md blockquote code{background:rgba(0,0,0,.08)}
+
+/* ------------------------------------------------------------- the viewer */
+.viewer{display:flex;align-items:center;gap:12px;padding:14px}
+.stage{flex:1;min-width:0;display:flex;align-items:center;justify-content:center;
+  background:var(--panel-2);border:1px solid var(--line);border-radius:6px;
+  padding:10px;overflow:hidden}
+.stage .slide{width:100%;height:auto;max-height:62vh;display:block;
+  border:1px solid var(--line);border-radius:3px;background:#fff}
+.slide-fail{padding:60px 20px;text-align:center;color:var(--bad);font-size:13px}
+.nav{border:1px solid var(--line);background:var(--panel);color:var(--muted);
+  border-radius:8px;width:38px;height:62px;font-size:22px;line-height:1;flex:none}
+.nav:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.nav:disabled{opacity:.3;cursor:not-allowed}
+.filmstrip{display:flex;gap:8px;overflow-x:auto;padding:0 14px 14px}
+.frame{position:relative;border:1px solid var(--line);border-radius:5px;
+  background:var(--panel);padding:0;flex:none;width:112px;overflow:hidden;
+  line-height:0}
+.frame:hover{border-color:var(--accent)}
+.frame.on{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+.frame .fthumb{width:100%;height:auto;display:block;background:#fff}
+.frame .fthumb.fail{aspect-ratio:16/9;background:var(--bad-soft);display:block}
+.fno{position:absolute;left:3px;top:3px;z-index:1;background:var(--panel);
+  color:var(--muted);border-radius:3px;font-size:10px;line-height:1.4;
+  padding:0 4px;font-family:var(--mono)}

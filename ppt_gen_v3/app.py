@@ -567,6 +567,37 @@ def post_build(body: Answers, tpl: Template = Depends(library)):
             "filename": "%s.pptx" % os.path.basename(tpl.folder)}
 
 
+@app.get("/api/builds/{token}/slides", tags=["build"])
+def build_slides(token: str):
+    """The built deck, slide by slide, as SVG.
+
+    The same in-process renderer the library screen uses, pointed at the file
+    that was just built rather than at the template. That matters: it shows the
+    deck *after* selection and after every placeholder was filled, which is the
+    only version anyone actually receives. Downloading and opening PowerPoint to
+    find a stray `{{...}}` is a slow way to learn something the screen can say.
+    """
+    if not re.fullmatch(r"[0-9a-f]{16}", token or ""):
+        raise HTTPException(400, "bad build token")
+    path = os.path.join(BUILDS, token + ".pptx")
+    if not os.path.exists(path):
+        raise HTTPException(404, "that build is gone")
+
+    from engine.library import Library
+
+    out = []
+    with Library(path) as lib:
+        for i, block in enumerate(lib.ordered(), 1):
+            try:
+                r = svgmod.render_slide(lib, block.part)
+            except Exception as exc:      # one bad slide must not lose the rest
+                r = {"svg": None, "error": "%s: %s" % (type(exc).__name__, exc)}
+            out.append({"index": i, "title": block.title, "svg": r.get("svg"),
+                        "unsupported": r.get("unsupported") or [],
+                        "error": r.get("error")})
+    return out
+
+
 @app.get("/download/{token}", tags=["build"])
 def download(token: str):
     if not re.fullmatch(r"[0-9a-f]{16}", token or ""):

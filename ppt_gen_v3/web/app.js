@@ -95,6 +95,7 @@ const S = {
   answers: {},
   dirty: false, editing: null, built: null,
   check: { ours: null, templafy: null },
+  slides: [], slideAt: 0,        // the built deck, for the viewer
 };
 
 const block = (id) => (S.inspect ? S.inspect.blocks.find(b => b.id === id) : null);
@@ -964,6 +965,8 @@ async function renderBuildResult() {
 
 function invalidateBuild() {
   S.built = null;
+  S.slides = [];
+  if ($("viewer-panel")) $("viewer-panel").hidden = true;
   $("build-dl").disabled = true;
   $("build-status").textContent = "answers changed — build again";
 }
@@ -1024,6 +1027,71 @@ $("preset").onchange = function () {
   if (!$("testbar").classList.contains("open")) $("inputs-toggle").click();
 };
 
+// -------------------------------------------------------- the deck viewer
+function renderViewer() {
+  const panel = $("viewer-panel");
+  if (!S.slides || !S.slides.length) { panel.hidden = true; return; }
+  panel.hidden = false;
+  const at = Math.max(0, Math.min(S.slideAt || 0, S.slides.length - 1));
+  S.slideAt = at;
+  const s = S.slides[at];
+
+  $("viewer-count").textContent = `(${at + 1} of ${S.slides.length})`;
+  $("viewer-stage").innerHTML = s.svg
+    ? s.svg.replace("<svg ", '<svg class="slide" ')
+    : `<div class="slide-fail">This slide did not render.<br>
+       <span class="fld-note">${esc(s.error || "")}</span><br>
+       <span class="fld-note">It is still in the file — only the preview
+       failed.</span></div>`;
+  $("viewer-prev").disabled = at === 0;
+  $("viewer-next").disabled = at === S.slides.length - 1;
+
+  $("viewer-strip").innerHTML = S.slides.map((x, i) => `
+    <button class="frame ${i === at ? "on" : ""}" data-slide="${i}"
+            title="${esc(x.title || "")}">
+      <span class="fno">${i + 1}</span>
+      ${x.svg ? x.svg.replace("<svg ", '<svg class="fthumb" ')
+      : '<span class="fthumb fail"></span>'}
+    </button>`).join("");
+  const active = $("viewer-strip").querySelector(".frame.on");
+  if (active && active.scrollIntoView)
+    active.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+function moveSlide(by) {
+  if (!S.slides || !S.slides.length) return;
+  S.slideAt = Math.max(0, Math.min((S.slideAt || 0) + by, S.slides.length - 1));
+  renderViewer();
+}
+$("viewer-prev").onclick = () => moveSlide(-1);
+$("viewer-next").onclick = () => moveSlide(1);
+document.addEventListener("click", (e) => {
+  const f = e.target.closest("[data-slide]");
+  if (f) { S.slideAt = +f.dataset.slide; renderViewer(); }
+});
+// Arrow keys, but never while someone is typing an answer into a form.
+document.addEventListener("keydown", (e) => {
+  if ($("viewer-panel").hidden) return;
+  const t = e.target;
+  if (t && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName || "")) return;
+  if (e.key === "ArrowLeft") { moveSlide(-1); e.preventDefault(); }
+  if (e.key === "ArrowRight") { moveSlide(1); e.preventDefault(); }
+});
+
+async function loadBuiltSlides(token) {
+  try {
+    S.slides = await getJSON(`/api/builds/${token}/slides`);
+    S.slideAt = 0;
+    renderViewer();
+    const broke = S.slides.filter(s => !s.svg).length;
+    if (broke) flash(`${broke} slide(s) could not be previewed — they are still `
+      + `in the downloaded file`, "bad");
+  } catch (err) {
+    S.slides = []; renderViewer();
+    flash(`Built, but the preview failed: ${err.message}`, "bad");
+  }
+}
+
 $("build-go").onclick = async () => {
   try {
     $("build-status").textContent = "building…";
@@ -1033,6 +1101,7 @@ $("build-go").onclick = async () => {
     $("build-status").textContent =
       `built — ${r.slides} slides. The same answers always give this deck.`;
     flash(`Built ${r.slides} slides`, "ok");
+    loadBuiltSlides(r.token);
   } catch (err) {
     $("build-status").textContent = "";
     flash(err.message, "bad");

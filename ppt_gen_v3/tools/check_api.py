@@ -179,6 +179,21 @@ def main():
     d = client.get(built["download"])
     check("GET /download", d.status_code == 200 and d.content[:2] == b"PK",
           "%d bytes, a real zip" % len(d.content))
+    # The viewer renders the BUILT file, not the library - so it shows what
+    # selection produced and what every placeholder became. A preview of the
+    # library would show {{ClientName}} and be reassuring about the wrong thing.
+    slides = client.get("/api/builds/%s/slides" % built["token"]).json()
+    check("GET /builds/{token}/slides", len(slides) == built["slides"],
+          "%d slide(s), all rendered: %s"
+          % (len(slides), all(s["svg"] for s in slides)))
+    check("the preview shows filled values, not placeholders",
+          not any("{{" in (s["svg"] or "") for s in slides),
+          "first slide reads %r" % (slides[0]["title"][:38] if slides else ""))
+    check("a bad build token is refused",
+          client.get("/api/builds/zz/slides").status_code == 400)
+    check("a missing build is 404",
+          client.get("/api/builds/%s/slides" % ("0" * 16)).status_code == 404)
+
     again = client.post("/api/libraries/demo/build", json={"answers": exp}).json()
     check("each build gets its own path", again["token"] != built["token"],
           "two builds cannot overwrite each other")
