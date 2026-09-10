@@ -264,6 +264,48 @@ payload catalogue this is committed, because nothing in the demo is
 confidential - and a mockup that invents its own results is only testing the
 imagination of whoever drew it.
 
+### 5. Build - the only screen a non-author opens
+
+Different audience, so a different shape. No block ids, no conditions, no
+placeholders: the question here is *what do I get*, not *how does it work*.
+
+- **Answers two ways** - fill the form, or drop the payload JSON Templafy would
+  have been given. Uploading **fills the form** rather than bypassing it, so the
+  answers stay visible and correctable before building.
+- **The form is generated from the field catalogue** - the same one that fills
+  the condition dropdowns. A form and a rule then cannot disagree about what a
+  field is called or which values it takes, because there is only one list.
+- **"What you will get" recalculates as you answer.** Same `select()` as
+  everything else.
+- **Unbound placeholders are surfaced here**, because this is the one failure a
+  user will see in their deck and cannot fix themselves - it names the author's
+  Mapping screen as the fix.
+- Changing an answer **invalidates the built deck** rather than leaving a stale
+  download button armed.
+
+## Many libraries
+
+The author raised this as a gap. It is worth being exact about what it costs,
+because the answer is unusual: **the backend already does it.**
+
+A template is a folder under `templates/<name>/`, with its own `library.pptx`,
+`rules.json`, `blocks.json` and `data_sources.json`. `list_templates()`,
+`find_template()` and `import_deck(name=...)` exist, and every `build.py`
+command already takes a template name. Only the *UI* was single-library.
+
+So it is an information-architecture change, not a model change:
+
+- **The library picker lives in the header**, not on a screen. It is context,
+  not a setting: the answer to "which library am I editing" must never be more
+  than a glance away, and it scopes all five screens at once.
+- **The name is asked for at import**, not derived from the filename. It becomes
+  the folder under `templates/` and the id every rule and binding refers to, so
+  it is not a label that can be tidied up later. The UI says what will happen -
+  which folder, and that a clashing name replaces an existing library *including
+  its rules*.
+- **Selecting a library that has not been imported sends you to the Library
+  screen**, rather than showing three empty ones.
+
 ## The risk, stated plainly
 
 Inference had an oracle: 70 decks Templafy really produced. Hand-authored rules

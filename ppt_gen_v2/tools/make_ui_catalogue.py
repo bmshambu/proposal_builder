@@ -174,8 +174,23 @@ def main(argv=None):
     presets = [{"label": label, "answers": flatten(payload)}
                for label, payload in payloads[::step][:args.presets]]
 
+    # The backend already models many libraries - a template is a folder under
+    # templates/, and every command takes its name. Only the UI was
+    # single-library. Real templates are listed here; the illustrative ones are
+    # flagged so the selector can show the model without claiming they exist.
+    libraries = [{"id": "public_audit", "name": "Public audit proposal",
+                  "description": "The live template, harvested from 70 decks",
+                  "slides": len(blocks), "fields": len(fields), "real": True}]
+    libraries += [
+        {"id": "private_audit", "name": "Private company audit",
+         "description": "not imported yet", "slides": 0, "fields": 0,
+         "real": False},
+        {"id": "advisory", "name": "Advisory proposal",
+         "description": "not imported yet", "slides": 0, "fields": 0,
+         "real": False}]
+
     data = {"fields": fields, "blocks": blocks, "deck": deck,
-            "presets": presets,
+            "presets": presets, "libraries": libraries,
             "brand": {"name": args.brand} if args.brand else None,
             "payloads": len(payloads),
             "source": os.path.abspath(args.payloads)}

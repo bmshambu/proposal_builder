@@ -253,6 +253,40 @@ main{padding:16px 18px 30vh}
 .notice.ok{background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok-line)}
 .notice b{display:block;margin-bottom:2px}
 
+/* ----------------------------------------------------------- libraries */
+.libpick{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:7px}
+.libpick select{font-weight:600;color:var(--ink);max-width:250px}
+.tabsplit{width:1px;height:20px;background:var(--line);margin:0 6px}
+.role{font-size:10px;text-transform:uppercase;letter-spacing:.07em;
+  color:var(--off);align-self:center;margin-right:2px}
+.naming{margin-top:13px;display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end}
+.fld{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--muted)}
+.fld.wide{flex:1;min-width:240px}
+.fld.wide input{width:100%}
+.fld input,.fld select{color:var(--ink)}
+.fld-note{font-size:12px;color:var(--muted);flex-basis:100%}
+.fld-note.warn{color:var(--warn)}
+
+/* ---------------------------------------------------------------- build */
+.cols.build{grid-template-columns:1fr 1fr}
+.tabrow{display:flex;gap:2px;padding:9px 14px 0}
+.seg-btn{background:none;border:1px solid transparent;border-bottom:2px solid transparent;
+  padding:6px 12px;color:var(--muted);font-size:13px}
+.seg-btn.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+.formgrid{display:flex;flex-direction:column;gap:11px;max-height:60vh;overflow:auto}
+.q{display:flex;flex-direction:column;gap:4px}
+.q .qt{font-size:12.5px}
+.q.bool{flex-direction:row;align-items:center;gap:8px}
+.q input[type=text],.q input[type=date],.q select{width:100%}
+.q.bool input{width:auto}
+.buildlist{padding:10px 14px;max-height:56vh;overflow:auto;display:flex;
+  flex-direction:column;gap:5px}
+.bl{display:flex;gap:9px;align-items:center;font-size:12.5px}
+.bl .n{width:22px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+.bl .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.buildfoot{border-top:1px solid var(--line);padding:12px 14px;display:flex;
+  gap:10px;align-items:center;flex-wrap:wrap}
+
 /* -------------------------------------------------------------- check */
 .pair{display:grid;grid-template-columns:1fr auto 1fr;gap:14px;align-items:center}
 .vs{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.06em}
@@ -315,14 +349,23 @@ td.used{color:var(--muted);font-size:12.5px;white-space:nowrap}
 
 <div class="brandbar"></div>
 <header>
-  <div class="brand"><span class="firm" id="firm"></span>Proposal builder
-    <small>template: <b>firm</b> &middot; library.pptx &middot;
-      <span id="hdr-count"></span></small></div>
+  <div class="brand"><span class="firm" id="firm"></span>Proposal builder</div>
+
+  <!-- Every screen is scoped to one library. It sits in the header rather
+       than on each screen because it is context, not a setting: the answer to
+       "which library am I editing" must never be more than a glance away. -->
+  <label class="libpick">Library
+    <select id="library"></select></label>
+
   <nav class="tabs">
+    <span class="role">author</span>
     <button data-tab="library" class="on">1 &middot; Library</button>
     <button data-tab="rules">2 &middot; Rules</button>
     <button data-tab="mapping">3 &middot; Mapping</button>
     <button data-tab="check">4 &middot; Check</button>
+    <span class="tabsplit"></span>
+    <span class="role">anyone</span>
+    <button data-tab="build">Build a deck</button>
   </nav>
   <span class="spacer"></span>
   <button class="btn theme" id="theme-btn" title="Light / dark / follow the system">
@@ -344,10 +387,24 @@ td.used{color:var(--muted);font-size:12.5px;white-space:nowrap}
     <div class="pad">
       <div class="dropzone" id="dropzone">
         <div class="dz-icon">&#8681;</div>
-        <div class="dz-main">Drop <b>library.pptx</b> here</div>
-        <div class="dz-sub">or <button class="btn" id="choose">choose a file</button>
+        <div class="dz-main">Drop a <b>.pptx</b> here to add a library</div>
+        <div class="dz-sub">or <button class="btn linky" id="choose">choose a file</button>
           &mdash; the deck is copied verbatim and inspected; nothing in it is
           modified</div>
+      </div>
+
+      <!-- The name is asked for at import, not derived from the filename.
+           It becomes the folder under templates/ and the id every rule,
+           binding and build refers to, so it is not a label that can be
+           tidied up later. -->
+      <div class="naming">
+        <label class="fld"><span>Save this library as</span>
+          <input type="text" id="lib-name" value="public_audit"
+                 placeholder="short_name_no_spaces"></label>
+        <label class="fld wide"><span>Description</span>
+          <input type="text" id="lib-desc"
+                 value="The live template, harvested from 70 decks"></label>
+        <div class="fld-note" id="name-note"></div>
       </div>
       <div class="current" id="current"></div>
     </div>
@@ -441,6 +498,52 @@ td.used{color:var(--muted);font-size:12.5px;white-space:nowrap}
   </div>
 
   <div class="panel" id="check-result"></div>
+</section>
+
+<!-- ============================================================== BUILD
+     The only screen someone who is not an author ever opens. Different job,
+     so a different shape: no library internals, no block ids, no rules -
+     answer the questions, see what you will get, take the deck. -->
+<section class="screen" id="screen-build">
+  <div class="cols build">
+
+    <div class="panel">
+      <h2>Answers <span class="hint" id="build-src"></span></h2>
+      <div class="tabrow">
+        <button class="seg-btn on" data-answers="form">Fill the form</button>
+        <button class="seg-btn" data-answers="upload">Upload a payload</button>
+      </div>
+
+      <div class="pad" id="answers-form"></div>
+
+      <div class="pad" id="answers-upload" hidden>
+        <div class="dropzone sm"><div class="dz-icon">&#8681;</div>
+          <div class="dz-main">Drop a payload <b>.json</b></div>
+          <div class="dz-sub">the same file Templafy would have been given</div>
+        </div>
+        <div class="fld-note" style="margin-top:10px">Uploading fills the form
+          rather than bypassing it, so the answers stay visible and can be
+          corrected before building.</div>
+        <div style="margin-top:10px">
+          <label class="fld"><span>or load one we already have</span>
+            <select id="build-preset"></select></label>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>What you will get <span class="count" id="build-count"></span>
+        <span class="hint">recalculated as you answer</span></h2>
+      <div class="notice bad" id="build-warn"></div>
+      <div class="buildlist" id="build-list"></div>
+      <div class="buildfoot">
+        <button class="btn primary" id="build-go">Build the deck</button>
+        <button class="btn" id="build-dl" disabled>Download .pptx</button>
+        <span class="fld-note" id="build-status">nothing built yet</span>
+      </div>
+    </div>
+
+  </div>
 </section>
 
 </main>
@@ -853,6 +956,84 @@ function renderInspect(){
     firm template imports untouched and can be replaced at any time.`;
 }
 
+/* -------------------------------------------------------------- libraries
+   The backend already models many: a template is a folder under templates/,
+   with its own library.pptx, rules.json and blocks.json, and every command
+   takes its name. Only the UI was ever single-library. */
+const LIBRARIES = DATA.libraries || [{id:"demo", name:"Demo template",
+  description:"the built-in example", slides:(DATA.blocks||[]).length,
+  fields:Object.keys(FIELDS).length, real:true}];
+let LIB = (LIBRARIES.find(l => l.real) || LIBRARIES[0]).id;
+const lib = () => LIBRARIES.find(l => l.id === LIB) || LIBRARIES[0];
+
+function renderLibPicker(){
+  document.getElementById("library").innerHTML = LIBRARIES.map(l =>
+    `<option value="${esc(l.id)}"${l.id===LIB?" selected":""}>${esc(l.name)}${
+      l.real ? "" : " — not imported"}</option>`).join("")
+    + `<option value="__new">+ Import another library…</option>`;
+}
+
+/* ------------------------------------------------------------------ build
+   The end user's screen. Everything an author needs - block ids, conditions,
+   placeholders - is absent by design: the question here is "what do I get",
+   not "how does it work". The form is generated from the same field catalogue
+   that fills the condition dropdowns, so a form and a rule can never disagree
+   about what a field is called or what values it takes. */
+let BUILT = false;
+
+function renderBuildForm(){
+  document.getElementById("build-src").textContent =
+    `${lib().name} · ${Object.keys(FIELDS).length} questions`;
+  document.getElementById("answers-form").innerHTML =
+    `<div class="formgrid">` + Object.keys(FIELDS).map(f => {
+      const spec = FIELDS[f], cur = ANSWERS[f];
+      if(spec.kind === "bool")
+        return `<label class="q bool"><input type="checkbox" data-ans="${esc(f)}"${
+          cur===true?" checked":""}><span class="qt">${esc(label(f))}</span></label>`;
+      let ctl;
+      if(spec.kind === "date")
+        ctl = `<input type="date" data-ans="${esc(f)}" data-date value="${esc(toISO(cur))}">`;
+      else if((spec.values||[]).length && spec.values.length <= 12)
+        ctl = `<select data-ans="${esc(f)}"><option value=""></option>${
+          spec.values.map(v => `<option${String(v)===String(cur)?" selected":""}>${
+            esc(v)}</option>`).join("")}</select>`;
+      else if((spec.values||[]).length)
+        ctl = `<input type="text" data-ans="${esc(f)}" list="q-${esc(f)}"
+                 value="${esc(cur??"")}" placeholder="${spec.values.length} options">
+               <datalist id="q-${esc(f)}">${spec.values.map(v =>
+                 `<option value="${esc(v)}">`).join("")}</datalist>`;
+      else
+        ctl = `<input type="text" data-ans="${esc(f)}" value="${esc(cur??"")}"
+                 placeholder="${esc(spec.eg??"")}">`;
+      return `<label class="q"><span class="qt" title="${esc(f)}">${
+        esc(label(f))}</span>${ctl}</label>`;
+    }).join("") + `</div>`;
+}
+
+function renderBuildResult(){
+  const on = DECK.filter(r => holds(r.when));
+  document.getElementById("build-count").textContent = `(${on.length} slides)`;
+  document.getElementById("build-list").innerHTML = on.map((r,i) => {
+    const b = BY_ID[r.id] || {t:r.id, ph:[]};
+    return `<div class="bl"><span class="n">${i+1}</span>
+      <span class="t">${esc(b.t)}</span></div>`;
+  }).join("");
+
+  // an unbound placeholder is the one failure a user sees and cannot fix
+  const used = new Set();
+  on.forEach(r => ((BY_ID[r.id]||{}).ph || []).forEach(p => used.add(p)));
+  const unbound = [...used].filter(p => !BINDINGS[p]);
+  const warn = document.getElementById("build-warn");
+  warn.innerHTML = unbound.length
+    ? `<b>${unbound.length} placeholder(s) in these slides are not bound</b>
+       The deck will show ${unbound.slice(0,3).map(p => "{{"+esc(p)+"}}").join(", ")}
+       as literal text. An author has to fix this on the Mapping screen.`
+    : "";
+  warn.hidden = !unbound.length;
+}
+
+function renderBuild(){ renderBuildForm(); renderBuildResult(); }
+
 /* ------------------------------------------------------------------ check
    Renders whatever verify.compare() returns. Nothing here assumes which
    matching method won: the demo library has no creationIds and comes back
@@ -981,6 +1162,72 @@ document.querySelectorAll(".tabs button").forEach(btn =>
 document.querySelectorAll("[data-goto]").forEach(b =>
   b.onclick = () => showTab(b.dataset.goto));
 
+/* ------------------------------------------------------ library switching */
+renderLibPicker();
+document.getElementById("library").onchange = function(){
+  if(this.value === "__new"){ renderLibPicker(); showTab("library"); return; }
+  LIB = this.value;
+  // A library that has not been imported has no slides, rules or fields, so
+  // send the author to the screen that can fix that rather than showing three
+  // empty ones.
+  if(!lib().real) showTab("library");
+  renderLibPicker(); renderLibrary(); renderBuild();
+  document.getElementById("lib-name").value = lib().id;
+  document.getElementById("lib-desc").value = lib().description || "";
+};
+
+/* the name is an id, not a label: it becomes a folder and every rule refers
+   to it, so say what will happen before it happens */
+document.getElementById("lib-name").oninput = function(){
+  const v = this.value.trim();
+  const note = document.getElementById("name-note");
+  const clash = LIBRARIES.some(l => l.id === v && l.id !== LIB);
+  const bad = v && !/^[a-z0-9_]+$/.test(v);
+  note.className = "fld-note" + ((clash || bad) ? " warn" : "");
+  note.textContent = !v ? "Required — this becomes the folder name."
+    : bad ? "Lower case, digits and underscores only — it becomes a folder name."
+    : clash ? `A library called "${v}" already exists. Saving replaces it, `
+              + `including its rules.`
+    : `Saves to templates/${v}/ — its own library.pptx, rules.json and bindings.`;
+};
+document.getElementById("lib-name").dispatchEvent(new Event("input"));
+
+/* ---------------------------------------------------------- build screen */
+function invalidateBuild(){
+  BUILT = false;
+  document.getElementById("build-dl").disabled = true;
+  document.getElementById("build-status").textContent =
+    "answers changed — build again";
+}
+document.querySelectorAll("[data-answers]").forEach(b => b.onclick = () => {
+  document.querySelectorAll("[data-answers]").forEach(x =>
+    x.classList.toggle("on", x === b));
+  document.getElementById("answers-form").hidden = b.dataset.answers !== "form";
+  document.getElementById("answers-upload").hidden = b.dataset.answers !== "upload";
+});
+(function(){
+  const sel = document.getElementById("build-preset");
+  sel.innerHTML = `<option value="">choose…</option>` + PRESETS.map((p,i) =>
+    `<option value="${i}">${esc(p.label)}</option>`).join("");
+  sel.onchange = function(){
+    if(this.value === "") return;
+    ANSWERS = {...PRESETS[this.value].answers};
+    renderBuild(); renderDeck(); renderTest(); invalidateBuild();
+    document.querySelector('[data-answers="form"]').click();
+  };
+})();
+document.getElementById("build-go").onclick = function(){
+  BUILT = true;
+  const n = DECK.filter(r => holds(r.when)).length;
+  document.getElementById("build-dl").disabled = false;
+  document.getElementById("build-status").textContent =
+    `built — ${n} slides, deterministic: the same answers always give this deck`;
+};
+document.getElementById("build-dl").onclick = () => {
+  document.getElementById("build-status").textContent =
+    "(mockup — the real button downloads the .pptx)";
+};
+
 /* ------------------------------------------------------- check: samples */
 (function(){
   const sel = document.getElementById("sample");
@@ -1091,7 +1338,11 @@ document.addEventListener("change", (e) => {
     ANSWERS[el.dataset.ans] = el.type === "checkbox" ? el.checked
                             : el.dataset.date !== undefined ? fromISO(el.value)
                             : el.value;
+    // one set of answers, two screens showing it - the author's test drive and
+    // the user's form are the same state, so both follow
     renderDeck();
+    renderBuildResult();
+    invalidateBuild();
   }
 });
 
@@ -1162,7 +1413,7 @@ badge.textContent = REAL
   : "MOCKUP · synthetic data";
 badge.classList.toggle("real", REAL);
 
-renderLibrary(); renderMapping(); redraw(); showTab("library");
+renderLibrary(); renderMapping(); renderBuild(); redraw(); showTab("library");
 window.addEventListener("resize", fitMain);
 </script>
 </body>
