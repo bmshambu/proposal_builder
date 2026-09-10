@@ -93,6 +93,9 @@ const CANNED = [
       AuditType: { kind: "choice", values: ["New Audit Client", "Expansion of Services"], eg: "New Audit Client", varies: true },
       DueDate: { kind: "date", values: [], eg: "20261130", varies: true },
       Quality: { kind: "bool", values: [false, true], eg: false, varies: true },
+      // answered identically everywhere, so it cannot be a condition - the
+      // Questions screen has to say so, and that path needs exercising
+      "I agree to comply": { kind: "choice", values: ["Accept"], eg: "Accept", varies: false },
     },
     payloads: [{ label: "p1", answers: { AuditType: "New Audit Client", DueDate: "20261130", Quality: true } }],
   }],
@@ -164,6 +167,8 @@ try {
     ["answers-form", /class="q/, "build form questions"],
     ["build-list", /class="bl"/, "build result slides"],
     ["library", /<option/, "library picker"],
+    ["q-body", /<tr>/, "the field catalogue"],
+    ["q-warn", /never vary|No answer sets/, "the never-varies warning"],
     ["test-body", /data-ans/, "the answers that affect the deck"],
   ];
   const pad = (s, n) => String(s).padEnd(n);
@@ -191,7 +196,9 @@ try {
     [{ dataset: {}, value: "null" }, "null", "typed 'null' is a string, not null"],
     [{ dataset: { date: "" }, value: "2026-11-30" }, "20261130", "date stored as the payload holds it"],
   ];
-  for (const [el, want, why] of cases) {
+  if (typeof globalThis.__readValue !== "function")
+    problems.push("readValue never got defined - the script did not finish");
+  for (const [el, want, why] of (globalThis.__readValue ? cases : [])) {
     const got = globalThis.__readValue(el);
     if (got !== want)
       problems.push(`readValue: ${why} — got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);

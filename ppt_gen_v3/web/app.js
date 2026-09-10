@@ -230,6 +230,7 @@ async function openLibrary(id) {
 
   renderLibPicker();
   await renderLibrary();
+  renderQuestions();
   renderMapping();
   renderRules();
   renderBuild();
@@ -557,6 +558,80 @@ async function restore(file) {
   } catch (err) { flash(err.message, "bad"); }
 }
 
+// --------------------------------------------------------- 2. questions
+const samplePicker = filePicker(".json", (f) => addSamples([f]));
+samplePicker.multiple = true;
+samplePicker.onchange = () => {
+  if (samplePicker.files.length) addSamples([...samplePicker.files]);
+  samplePicker.value = "";
+};
+$("qchoose").onclick = () => samplePicker.click();
+dropTarget($("qdrop"), ".json", (f) => addSamples([f]));
+// dropTarget hands over one file; take the whole drop, since "several at once"
+// is the entire point of this screen
+$("qdrop").addEventListener("drop", (e) => {
+  const files = [...(e.dataTransfer.files || [])].filter(f => /\.json$/i.test(f.name));
+  if (files.length > 1) addSamples(files.slice(1));
+});
+
+async function addSamples(files) {
+  let cat = null;
+  for (const file of files) {
+    try {
+      const answers = JSON.parse(await file.text());
+      cat = await sendJSON("/api/payloads",
+        { name: file.name.replace(/\.json$/i, ""), answers });
+    } catch (err) {
+      flash(`${file.name}: ${err.message}`, "bad");
+    }
+  }
+  if (!cat) return;
+  S.fields = cat.fields; S.presets = cat.payloads;
+  fillPresets();
+  flash(`${S.presets.length} answer set(s) — ${Object.keys(S.fields).length} field(s)`, "ok");
+  renderQuestions(); renderRules(); renderMapping(); renderBuild();
+}
+
+function renderQuestions() {
+  const names = Object.keys(S.fields);
+  $("qcurrent").innerHTML = S.presets.length
+    ? `<span class="f">${S.presets.length} answer set(s)</span>
+       <span class="m">${esc(S.presets.map(p => p.label).join(", ")).slice(0, 120)}</span>`
+    : "";
+  $("q-count").textContent = names.length ? `(${names.length})` : "";
+
+  // A field answered identically everywhere cannot explain anything, so a
+  // condition on it is always true or always false. Say so here rather than
+  // letting someone discover it after writing the rule.
+  const fixed = names.filter(f => S.fields[f].varies === false);
+  const warn = $("q-warn");
+  warn.innerHTML = !names.length
+    ? `<b>No answer sets yet</b> Drop the JSON files real requests arrive as.
+       Until then the condition editor has no fields to offer and the build form
+       has no questions.`
+    : fixed.length
+      ? `<b>${fixed.length} field(s) never vary</b>
+         ${fixed.map(f => `<code>${esc(f)}</code>`).join(", ")} — answered the same
+         way in every set here, so a condition on one is always true or always
+         false. Add a set that answers it differently, or leave it alone.`
+      : "";
+  warn.hidden = !warn.innerHTML;
+
+  $("q-body").innerHTML = names.map(f => {
+    const s = S.fields[f];
+    const vals = (s.values || []).map(v => `<span class="tag">${esc(String(v))}</span>`);
+    return `<tr><td class="ph" title="${esc(f)}">${esc(f)}</td>
+      <td class="used">${esc(s.kind)}</td>
+      <td>${vals.length ? `<div class="tags">${vals.slice(0, 8).join("")}
+        ${vals.length > 8 ? `<span class="tag">+${vals.length - 8} more</span>` : ""}</div>`
+        : `<span class="preview">free text</span>`}</td>
+      <td class="preview">${esc(s.kind === "date" ? humanDate(s.eg) : String(s.eg ?? ""))}</td>
+      <td>${s.varies === false
+        ? `<span class="pill warn">never varies</span>`
+        : `<span class="pill ok">usable</span>`}</td></tr>`;
+  }).join("");
+}
+
 // ---------------------------------------------------------- 3. mapping
 function renderMapping() {
   const i = S.inspect;
@@ -707,30 +782,33 @@ document.querySelectorAll("[data-answers]").forEach(b => b.onclick = () => {
   $("answers-upload").hidden = b.dataset.answers !== "upload";
 });
 
-const payloadPicker = filePicker(".json", uploadPayload);
-document.querySelectorAll("#answers-upload .dropzone").forEach(dz => {
-  dropTarget(dz, ".json", uploadPayload);
-  dz.querySelector(".dz-sub").insertAdjacentHTML("beforeend",
-    ` — or <button class="btn linky" id="pick-payload">choose a file</button>`);
-});
-document.addEventListener("click", e => {
-  if (e.target.id === "pick-payload") payloadPicker.click();
-});
+/* Two uploads that look alike and are not.
+ *
+ * On the Questions screen the AUTHOR declares what users will be asked: the
+ * file is kept, and the field catalogue is rebuilt from every answer set held.
+ * On the Build screen a USER supplies answers for one deck: the file fills the
+ * form and is not kept, because someone building a proposal should not be able
+ * to change the template's questions by dropping a file on it.
+ *
+ * The same handler did both, which is why the author had to visit the user's
+ * screen to get started.
+ */
+const answersPicker = filePicker(".json", useAnswers);
+dropTarget($("adrop"), ".json", useAnswers);
+// The button is in the markup, not injected here. Rewriting someone else's
+// markup at load means a change to the HTML takes the whole page down at the
+// first line that assumes a shape - which is how this file already lost a
+// screen once.
+$("pick-answers").onclick = () => answersPicker.click();
 
-async function uploadPayload(file) {
+async function useAnswers(file) {
   try {
-    const answers = JSON.parse(await file.text());
-    const name = file.name.replace(/\.json$/i, "");
-    const cat = await sendJSON("/api/payloads", { name, answers });
-    S.fields = cat.fields; S.presets = cat.payloads;
-    S.answers = { ...answers };
-    flash(`Loaded ${name} — the catalogue now knows ${Object.keys(S.fields).length} field(s)`, "ok");
-    fillPresets();
-    renderBuild(); renderMapping(); renderRules();
+    S.answers = { ...JSON.parse(await file.text()) };
+    flash(`Answers loaded from ${file.name}`, "ok");
+    renderBuild(); renderDeck(); renderTest(); invalidateBuild();
     document.querySelector('[data-answers="form"]').click();
-    invalidateBuild();
   } catch (err) {
-    flash(`${file.name} is not a payload: ${err.message}`, "bad");
+    flash(`${file.name} is not an answer set: ${err.message}`, "bad");
   }
 }
 
@@ -1016,6 +1094,7 @@ window.addEventListener("beforeunload", (e) => {
     const cat = await getJSON("/api/fields");
     S.fields = cat.fields; S.presets = cat.payloads;
     fillPresets();
+    renderQuestions();
   } catch (_) { /* no payloads yet is a normal state, not an error */ }
   try {
     await loadLibraries();

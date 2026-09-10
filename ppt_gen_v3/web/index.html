@@ -22,10 +22,11 @@
 
   <nav class="tabs">
     <span class="role">author</span>
-    <button data-tab="library" class="on">1 &middot; Library</button>
-    <button data-tab="rules">2 &middot; Rules</button>
-    <button data-tab="mapping">3 &middot; Mapping</button>
-    <button data-tab="check">4 &middot; Check</button>
+    <button data-tab="library" class="on">1 &middot; Slides</button>
+    <button data-tab="questions">2 &middot; Questions</button>
+    <button data-tab="rules">3 &middot; Rules</button>
+    <button data-tab="mapping">4 &middot; Values</button>
+    <button data-tab="check">5 &middot; Check</button>
     <span class="tabsplit"></span>
     <span class="role">anyone</span>
     <button data-tab="build">Build a deck</button>
@@ -91,6 +92,39 @@
     <h2>Every slide in the library <span class="count" id="lib-count"></span>
       <span class="hint">thumbnails rendered in-process by engine/svg.py - no PowerPoint, no LibreOffice</span></h2>
     <div class="grid" id="lib-grid"></div>
+  </div>
+</section>
+
+<!-- ========================================================== QUESTIONS
+     An authoring step, not a building one. Declaring what users will be asked
+     is the author's job; it was on the Build screen, which meant an author had
+     to detour through a screen that is not theirs to get started. -->
+<section class="screen" id="screen-questions">
+  <div class="panel">
+    <h2>The questions users will answer
+      <span class="hint">read from real answer sets — nothing is typed by hand</span></h2>
+    <div class="pad">
+      <div class="dropzone" id="qdrop">
+        <div class="dz-icon">&#8681;</div>
+        <div class="dz-main">Drop answer sets (<b>.json</b>) here</div>
+        <div class="dz-sub">or <button class="btn linky" id="qchoose">choose files</button>
+          &mdash; several at once. One answer set cannot show which fields vary,
+          and a field that never varies cannot be a rule.</div>
+      </div>
+      <div class="current" id="qcurrent"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Fields <span class="count" id="q-count"></span>
+      <span class="hint">this list fills the condition editor, the value
+        bindings and the build form &mdash; one source, so they cannot disagree</span></h2>
+    <div class="notice warn" id="q-warn"></div>
+    <table>
+      <thead><tr><th>Field</th><th>Kind</th><th>Values seen</th>
+        <th>Example</th><th></th></tr></thead>
+      <tbody id="q-body"></tbody>
+    </table>
   </div>
 </section>
 
@@ -192,15 +226,17 @@
       <div class="pad" id="answers-form"></div>
 
       <div class="pad" id="answers-upload" hidden>
-        <div class="dropzone sm"><div class="dz-icon">&#8681;</div>
-          <div class="dz-main">Drop a payload <b>.json</b></div>
-          <div class="dz-sub">the same file Templafy would have been given</div>
+        <div class="dropzone sm" id="adrop"><div class="dz-icon">&#8681;</div>
+          <div class="dz-main">Drop an answer set (<b>.json</b>)</div>
+          <div class="dz-sub">the same file Templafy would have been given &mdash;
+            or <button class="btn linky" id="pick-answers">choose a file</button></div>
         </div>
-        <div class="fld-note" style="margin-top:10px">Uploading fills the form
-          rather than bypassing it, so the answers stay visible and can be
-          corrected before building.</div>
+        <div class="fld-note" style="margin-top:10px">This fills the form rather
+          than bypassing it, so the answers stay visible and can be corrected
+          before you build. It does not change the template&rsquo;s questions —
+          that is the author&rsquo;s job, on the Questions screen.</div>
         <div style="margin-top:10px">
-          <label class="fld"><span>or load one we already have</span>
+          <label class="fld"><span>or reuse an answer set already here</span>
             <select id="build-preset"></select></label>
         </div>
       </div>

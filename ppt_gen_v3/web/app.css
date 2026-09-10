@@ -259,7 +259,9 @@ main{padding:16px 18px 30vh}
 .stat b{display:block;font-size:21px;line-height:1.2;font-variant-numeric:tabular-nums}
 .stat span{font-size:11.5px;color:var(--muted)}
 .stat.warn b{color:var(--warn)} .stat.bad b{color:var(--bad)} .stat.ok b{color:var(--ok)}
-.empty main .panel:not(#drop-panel){display:none}
+.empty #screen-library .panel:not(#drop-panel){display:none}
+/* the Questions screen works with no library at all - the questions are
+   about the request, not about the deck */
 
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));
   gap:13px;padding:14px}
