@@ -22,8 +22,8 @@ reference_rules.json    the answer key — try without it first
 4. **Build** with a payload, then **compare** against the target of the same
    name. The goal is `MATCH`.
 
-Load all three payloads into `data/payloads/` first if you want the build form
-and condition dropdowns populated: one payload cannot tell you which fields
+Upload all three payloads on the **Questions** screen first, so the build form
+and condition dropdowns are populated: one payload cannot tell you which fields
 vary, and a field that never varies is not a usable condition.
 
 ## Why three payloads
