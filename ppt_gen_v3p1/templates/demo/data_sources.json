@@ -1,0 +1,10 @@
+{
+  "_comment": "Stub stand-ins for the external systems milestone 4 will wire (v2-plan §6). Anything missing here is reported by name, not guessed.",
+  "profile": { "lead_partner": "Dana Whitfield" },
+  "finance": {
+    "planning": "$48,000",
+    "interim": "$126,000",
+    "year_end": "$171,000",
+    "total": "$345,000"
+  }
+}

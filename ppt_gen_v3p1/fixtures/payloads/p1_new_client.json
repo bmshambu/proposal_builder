@@ -1,0 +1,10 @@
+{
+  "FullClientName": "Northwind Manufacturing plc",
+  "ShortClientName": "Northwind",
+  "DueDate": "20261130",
+  "AuditType": "New Audit Client",
+  "Industry": "Technology",
+  "City": "Chicago",
+  "Transition_lab": false,
+  "Quality": true
+}

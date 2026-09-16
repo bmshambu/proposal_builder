@@ -1,0 +1,16 @@
+# generated / local state - never commit templates, decks or payloads
+data/builds/
+data/renders/
+tools/shots/
+data/payloads/
+templates/*/
+!templates/demo/
+*.bak
+__pycache__/
+
+# PowerPoint's lock files - present whenever a deck is open
+~$*
+
+# Graph credentials for the render spike. Never committed: the client secret
+# is a key to a document library that will hold client decks, however briefly.
+.env

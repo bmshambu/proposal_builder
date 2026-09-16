@@ -1,0 +1,178 @@
+{
+  "name": "Fixture master",
+  "library": "library.pptx",
+  "_comment": "The answer key for the fixture exercise. Author your own rules first; this is here to check against, and to regenerate the targets.",
+  "baseline": [
+    "cover",
+    "agenda",
+    "about_us",
+    "engagement_team",
+    "approach",
+    "transition_plan",
+    "transition_lab",
+    "continuity",
+    "scope",
+    "scope_expansion",
+    "industry_credentials",
+    "local_office",
+    "quality",
+    "fees",
+    "contacts"
+  ],
+  "blocks": {
+    "cover": {
+      "slides": [
+        "cover"
+      ],
+      "when": "always"
+    },
+    "agenda": {
+      "slides": [
+        "agenda"
+      ],
+      "when": "always"
+    },
+    "about_us": {
+      "slides": [
+        "about_us"
+      ],
+      "when": "always"
+    },
+    "engagement_team": {
+      "slides": [
+        "engagement_team"
+      ],
+      "when": "always"
+    },
+    "approach": {
+      "slides": [
+        "approach"
+      ],
+      "when": "always"
+    },
+    "transition_plan": {
+      "slides": [
+        "transition_plan"
+      ],
+      "when": {
+        "field": "AuditType",
+        "eq": "New Audit Client"
+      }
+    },
+    "transition_lab": {
+      "slides": [
+        "transition_lab"
+      ],
+      "when": {
+        "field": "Transition_lab",
+        "eq": true
+      }
+    },
+    "continuity": {
+      "slides": [
+        "continuity"
+      ],
+      "when": {
+        "field": "AuditType",
+        "eq": "Expansion of Services"
+      }
+    },
+    "scope": {
+      "slides": [
+        "scope"
+      ],
+      "when": "always"
+    },
+    "scope_expansion": {
+      "slides": [
+        "scope_expansion"
+      ],
+      "when": {
+        "field": "AuditType",
+        "eq": "Expansion of Services"
+      }
+    },
+    "industry_credentials": {
+      "slides": [
+        "industry_credentials"
+      ],
+      "when": {
+        "field": "Industry",
+        "exists": true
+      }
+    },
+    "local_office": {
+      "slides": [
+        "local_office"
+      ],
+      "when": {
+        "field": "City",
+        "exists": true
+      }
+    },
+    "quality": {
+      "slides": [
+        "quality"
+      ],
+      "when": {
+        "field": "Quality",
+        "eq": true
+      }
+    },
+    "fees": {
+      "slides": [
+        "fees"
+      ],
+      "when": "always"
+    },
+    "contacts": {
+      "slides": [
+        "contacts"
+      ],
+      "when": "always"
+    }
+  },
+  "placeholders": {
+    "{{ClientName}}": {
+      "from": "field",
+      "field": "FullClientName"
+    },
+    "{{DueDate}}": {
+      "from": "field",
+      "field": "DueDate",
+      "format": "long_comma"
+    },
+    "{{City}}": {
+      "from": "field",
+      "field": "City"
+    },
+    "{{Industry}}": {
+      "from": "field",
+      "field": "Industry"
+    },
+    "{{FirmName}}": {
+      "from": "literal",
+      "value": "Demo LLP"
+    },
+    "{{LeadPartner}}": {
+      "from": "literal",
+      "value": "Alex Reyes"
+    },
+    "{{FeePlanning}}": {
+      "from": "literal",
+      "value": "$48,000"
+    },
+    "{{FeeInterim}}": {
+      "from": "literal",
+      "value": "$62,000"
+    },
+    "{{FeeYearEnd}}": {
+      "from": "literal",
+      "value": "$71,000"
+    },
+    "{{FeeTotal}}": {
+      "from": "literal",
+      "value": "$181,000"
+    }
+  }
+}
