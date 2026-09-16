@@ -522,7 +522,7 @@ function moveRow(deck, id, pos) {
 function moveBarHTML(row, index) {
   return `<div class="moverow" data-moving="${esc(row.id)}">
     <span class="m">${esc(titleOf(row.id))} is <b>#${index + 1}</b> of
-      ${S.deck.length} in this list</span>
+      ${S.deck.length}</span>
     <label class="movelab">Move to
       <input type="number" id="move-to" min="1" max="${S.deck.length}"
              value="${index + 1}" data-move-input></label>
@@ -536,13 +536,12 @@ function renderDeck() {
   let n = 0, off = 0;
   $("deck").innerHTML = S.deck.map((row, index) => {
     const on = holds(row.when);
-    on ? n++ : off++;
+    on ? n++ : off++;               // for the tally, not for the row number
     const c = condText(row.when);
     return `<div class="row ${on ? "" : "excluded"} ${S.moving === row.id ? "moving" : ""}"
-        draggable="true" data-id="${esc(row.id)}" data-move="${esc(row.id)}"
-        title="Drag to reorder, or click to move it to a position">
+        draggable="true" data-id="${esc(row.id)}" data-move="${esc(row.id)}">
       <span class="grip">&#8942;&#8942;</span>
-      <span class="num">${on ? n : "–"}</span>
+      <span class="num" title="Position ${index + 1} of ${S.deck.length} — click to move it">${index + 1}</span>
       ${thumb(row.id, "sm")}
       <div class="namecell"><div class="t" title="${esc(titleOf(row.id))}">${esc(titleOf(row.id))}</div>
         <div class="id">${esc(row.id)}</div></div>

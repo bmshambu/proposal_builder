@@ -189,8 +189,13 @@ main{padding:16px 18px 30vh}
 .row.excluded{opacity:.42}
 .row.excluded .thumb{filter:grayscale(1)}
 .grip{color:var(--off-soft);cursor:grab;user-select:none;letter-spacing:-1px}
-.num{width:22px;text-align:right;color:var(--muted);font-size:12px;
-  font-variant-numeric:tabular-nums}
+/* Wide enough for three digits: a real library runs past 100 slides, and a
+   number that wraps or clips makes the column useless for finding a position. */
+.num{width:30px;text-align:right;color:var(--muted);font-size:12px;
+  font-variant-numeric:tabular-nums;cursor:pointer}
+/* The row opens its move bar on click; the grip is the drag handle. */
+.row{cursor:pointer}
+.row .chip,.row .del{cursor:pointer}
 .namecell{min-width:0;width:34%}
 .namecell .t{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .namecell .id{font-family:var(--mono);font-size:11px;color:var(--muted);

@@ -78,13 +78,15 @@ Drag a slide out of the deck to drop it entirely.
 **Click a row to move it by number.** Dragging is fine for ten slides and
 miserable for a hundred, where the target scrolls out of sight before the
 pointer gets there. The row opens a bar saying where it currently sits — *"Our
-fee philosophy is #90 of 128 in this list"* — with a box to type the position it
-should have. Enter moves it, Esc closes. The slide is scrolled back into view
-and highlighted where it lands.
+fee philosophy is #90 of 128"* — with a box to type the position it should
+have. Enter moves it, Esc closes. The slide is scrolled back into view and
+highlighted where it lands.
 
-That position is its place **in this list**, which is not the number in the
-row's left column: that one is the slide's position in the *built* deck for the
-current answers, and skips excluded slides.
+The number on each row is its position **in this list**, counting every row
+including the greyed-out ones. A greyed row is a slide these answers leave out;
+it still holds its place in the order, because a different answer set puts it
+back. How many slides the current answers actually produce is the count in the
+panel heading, and the built deck's own numbering is on the Build screen.
 
 **Suggest from decks** reads decks Templafy produced and proposes the order and
 conditions, as markdown to read against the screen — nothing is applied for you.
