@@ -75,6 +75,17 @@ that one.
 Drag rows into deck order. Give each slide a condition, or leave it `always`.
 Drag a slide out of the deck to drop it entirely.
 
+**Click a row to move it by number.** Dragging is fine for ten slides and
+miserable for a hundred, where the target scrolls out of sight before the
+pointer gets there. The row opens a bar saying where it currently sits — *"Our
+fee philosophy is #90 of 128 in this list"* — with a box to type the position it
+should have. Enter moves it, Esc closes. The slide is scrolled back into view
+and highlighted where it lands.
+
+That position is its place **in this list**, which is not the number in the
+row's left column: that one is the slide's position in the *built* deck for the
+current answers, and skips excluded slides.
+
 **Suggest from decks** reads decks Templafy produced and proposes the order and
 conditions, as markdown to read against the screen — nothing is applied for you.
 When rules already exist it reports only **what changed**, so a second batch of

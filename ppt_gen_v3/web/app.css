@@ -210,6 +210,27 @@ main{padding:16px 18px 30vh}
 .del:hover{color:var(--bad)}
 .status{font-size:11px;width:62px;text-align:right;color:var(--off);flex-shrink:0}
 
+/* Move-to: dragging is fine for ten slides and miserable for a hundred. Styled
+   like the condition editor because it is the same idea - a row opening to
+   reveal one control. */
+.row.moving{background:var(--hover);border-color:var(--accent)}
+.row.just-moved{animation:landed 1.6s ease-out}
+@keyframes landed{
+  0%{background:var(--accent-soft);border-color:var(--accent)}
+  100%{background:transparent;border-color:transparent}
+}
+.moverow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  margin:2px 8px 10px 60px;background:var(--panel-2);border:1px solid var(--line);
+  border-left:3px solid var(--accent);border-radius:6px;padding:10px 12px}
+.moverow .m{font-size:12.5px;color:var(--muted)}
+.moverow .m b{color:var(--ink)}
+.movelab{display:flex;align-items:center;gap:6px;font-size:12.5px}
+.movelab input{width:80px}
+/* .fld-note is flex-basis:100% elsewhere, which would put the key hint on a
+   line of its own and make the bar twice as tall as it needs to be. */
+.moverow .fld-note{flex-basis:auto;margin-left:2px}
+.btn.sm{padding:4px 10px;font-size:12.5px}
+
 .editor{margin:2px 8px 10px 60px;background:var(--panel-2);border:1px solid var(--line);
   border-left:3px solid var(--accent);border-radius:6px;padding:12px 14px}
 .editor .line{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}

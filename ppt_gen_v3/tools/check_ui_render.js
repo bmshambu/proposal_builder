@@ -146,7 +146,7 @@ global.fetch = async (url) => {
 try {
   // app.js is strict mode, so its scope does not leak into ours. Ask for the
   // one function this file needs to test directly.
-  eval(js + "\n;globalThis.__readValue = readValue; globalThis.__formatted = formatted; globalThis.__md = md; globalThis.__viewer = { load: loadBuiltSlides, big, small };");
+  eval(js + "\n;globalThis.__readValue = readValue; globalThis.__formatted = formatted; globalThis.__md = md; globalThis.__viewer = { load: loadBuiltSlides, big, small }; globalThis.__moveRow = moveRow;");
 } catch (err) {
   problems.push("the page threw while initialising: " + err.message);
 }
@@ -210,6 +210,40 @@ try {
       problems.push(`readValue: ${why} — got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
   }
   console.log("readValue: " + cases.length + " case(s) checked");
+
+  // Moving a slide by typing a position. Dragging row 90 to position 3 is the
+  // thing this replaces, so the arithmetic has to be right in BOTH directions:
+  // removing the row first shifts everything after it up by one.
+  const deck5 = ["a", "b", "c", "d", "e"].map(id => ({ id, when: null }));
+  const ids = (d) => d.map(r => r.id).join("");
+  const moves = [
+    ["a", 3, "bcade", "down: lands at 3, not 4"],
+    ["e", 1, "eabcd", "up to the top"],
+    ["b", 5, "acdeb", "down to the end"],
+    ["c", 3, "abcde", "to where it already is: unchanged"],
+    ["a", 99, "bcdea", "past the end is clamped"],
+    ["a", 0, "abcde", "below 1 is clamped"],
+    ["zz", 2, "abcde", "an id not in the deck changes nothing"],
+  ];
+  if (typeof globalThis.__moveRow !== "function") {
+    problems.push("moveRow never got defined");
+  } else {
+    for (const [id, pos, want, why] of moves) {
+      const got = ids(globalThis.__moveRow(deck5, id, pos));
+      if (got !== want)
+        problems.push(`moveRow: ${why} - got ${got}, want ${want}`);
+    }
+    // and it must not mutate the deck it was handed
+    globalThis.__moveRow(deck5, "a", 4);
+    if (ids(deck5) !== "abcde")
+      problems.push("moveRow mutated the deck it was given");
+    console.log("moveRow: " + moves.length + " case(s) checked");
+  }
+
+  // The affordance has to be on the row, or the feature is undiscoverable.
+  const deckHTML = (boxes["deck"] || {}).innerHTML || "";
+  if (!/data-move="/.test(deckHTML))
+    problems.push("deck rows offer no way to move a slide by position");
 
   // The viewer shows one of two things and must not confuse them: a PNG that
   // PowerPoint exported, or our own SVG approximation. Showing the second while

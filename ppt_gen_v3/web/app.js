@@ -105,7 +105,7 @@ const S = {
   deck: [], bindings: {},
   fields: {}, presets: [],
   answers: {},
-  dirty: false, editing: null, built: null,
+  dirty: false, editing: null, moving: null, built: null,
   check: { ours: null, templafy: null },
   slides: [], slideAt: 0,        // the built deck, for the viewer
   stage: { pptx: null, pdf: null },   // an import waiting for both its files
@@ -495,13 +495,52 @@ function holds(when) {
   return true;
 }
 
+/** Move `id` to 1-based list position `pos`. Pure: returns a new deck.
+ *
+ *  Remove first, then insert at pos-1. That is right in both directions: the
+ *  removal shifts everything after it up by one, which is exactly what makes
+ *  "move to 20" land at 20 when travelling down as well as up.
+ */
+function moveRow(deck, id, pos) {
+  const from = deck.findIndex(r => r.id === id);
+  if (from < 0) return deck;
+  const target = Math.max(1, Math.min(Math.round(pos) || 0, deck.length));
+  const rest = deck.filter(r => r.id !== id);
+  rest.splice(target - 1, 0, deck[from]);
+  return rest;
+}
+
+/** The "move to" bar, opened by clicking a row.
+ *
+ *  Dragging is fine for ten slides and miserable for a hundred and twenty-eight:
+ *  the target scrolls out of sight long before the pointer arrives.
+ *
+ *  It says "in this list" and shows the count because the number in the row's
+ *  left column is a different number — that one is the slide's position in the
+ *  *built* deck for the current answers, and skips excluded rows.
+ */
+function moveBarHTML(row, index) {
+  return `<div class="moverow" data-moving="${esc(row.id)}">
+    <span class="m">${esc(titleOf(row.id))} is <b>#${index + 1}</b> of
+      ${S.deck.length} in this list</span>
+    <label class="movelab">Move to
+      <input type="number" id="move-to" min="1" max="${S.deck.length}"
+             value="${index + 1}" data-move-input></label>
+    <button class="btn primary sm" data-move-go="${esc(row.id)}">Move</button>
+    <button class="btn sm" data-move-cancel="1">Cancel</button>
+    <span class="fld-note">Enter moves &middot; Esc closes</span>
+  </div>`;
+}
+
 function renderDeck() {
   let n = 0, off = 0;
-  $("deck").innerHTML = S.deck.map(row => {
+  $("deck").innerHTML = S.deck.map((row, index) => {
     const on = holds(row.when);
     on ? n++ : off++;
     const c = condText(row.when);
-    return `<div class="row ${on ? "" : "excluded"}" draggable="true" data-id="${esc(row.id)}">
+    return `<div class="row ${on ? "" : "excluded"} ${S.moving === row.id ? "moving" : ""}"
+        draggable="true" data-id="${esc(row.id)}" data-move="${esc(row.id)}"
+        title="Drag to reorder, or click to move it to a position">
       <span class="grip">&#8942;&#8942;</span>
       <span class="num">${on ? n : "–"}</span>
       ${thumb(row.id, "sm")}
@@ -515,12 +554,53 @@ function renderDeck() {
       </button>
       <span class="status">${on ? "" : "not in deck"}</span>
       <button class="del" data-del="${esc(row.id)}" title="Remove from the deck">&times;</button>
-    </div>` + (S.editing === row.id ? editorHTML(row) : "");
+    </div>`
+      + (S.moving === row.id ? moveBarHTML(row, index) : "")
+      + (S.editing === row.id ? editorHTML(row) : "");
   }).join("");
   $("deck-count").textContent = `(${S.deck.length} slides, ${n} for these answers)`;
   $("tally").textContent = n;
   $("tally-off").textContent = off ? ` · ${off} excluded` : "";
   renderSaveState();
+  focusMoveInput();
+}
+
+/** Put the cursor in the box, selected, so a position can just be typed. */
+function focusMoveInput() {
+  const box = $("move-to");
+  if (!box || !S.moving) return;
+  box.focus();
+  if (box.select) box.select();
+}
+
+/** Apply the typed position, then show where the slide landed.
+ *
+ *  After a move of any distance the row is off screen, so scrolling to it and
+ *  marking it is the only way to see that the right slide went to the right
+ *  place.
+ */
+function applyMove(id) {
+  const box = $("move-to");
+  const pos = box ? Number(box.value) : NaN;
+  if (!pos || pos < 1 || pos > S.deck.length) {
+    flash(`Give a position between 1 and ${S.deck.length}`, "bad");
+    return;
+  }
+  const before = S.deck.findIndex(r => r.id === id);
+  S.deck = moveRow(S.deck, id, pos);
+  S.moving = null;
+  const landed = S.deck.findIndex(r => r.id === id);
+  if (landed !== before) S.dirty = true;
+  renderDeck(); renderTest(); renderBuildResult();
+  // Found by comparing dataset, not a selector: a block id is author-chosen
+  // and CSS.escape is not somewhere to learn that the hard way.
+  const el = [...document.querySelectorAll(".row")].find(r => r.dataset.id === id);
+  if (el) {
+    if (el.scrollIntoView) el.scrollIntoView({ block: "center" });
+    el.classList.add("just-moved");
+    setTimeout(() => el.classList.remove("just-moved"), 1600);
+  }
+  flash(`${titleOf(id)} is now #${landed + 1}`, "ok");
 }
 
 const OPERATORS = [["eq", "is"], ["ne", "is not"], ["in", "is one of"],
@@ -1362,8 +1442,18 @@ $("inputs-toggle").onclick = function () {
 $("pool-search").oninput = renderPool;
 
 document.addEventListener("click", (e) => {
-  const t = e.target.closest("[data-add],[data-del],[data-edit],[data-cancel],[data-apply],[data-restore],[data-drop]");
+  const t = e.target.closest("[data-add],[data-del],[data-edit],[data-cancel],[data-apply],[data-restore],[data-drop],[data-move],[data-move-go],[data-move-cancel],[data-move-input]");
   if (!t) return;
+  // Move-to first: its controls sit inside the bar, and the bar sits next to
+  // a row that also answers to [data-move].
+  if (t.dataset.moveInput !== undefined) return;          // typing, not a click
+  if (t.dataset.moveGo !== undefined) { applyMove(t.dataset.moveGo); return; }
+  if (t.dataset.moveCancel !== undefined) { S.moving = null; renderDeck(); return; }
+  if (t.dataset.move !== undefined) {
+    S.moving = S.moving === t.dataset.move ? null : t.dataset.move;
+    renderDeck();
+    return;
+  }
   if (t.dataset.restore !== undefined) { restore(t.dataset.restore); return; }
   if (t.dataset.drop !== undefined) { dropSample(t.dataset.drop); return; }
   if (t.dataset.add !== undefined) { S.deck.push({ id: t.dataset.add, when: null }); S.dirty = true; }
@@ -1434,6 +1524,12 @@ document.addEventListener("change", (e) => {
   }
 });
 
+document.addEventListener("keydown", (e) => {
+  if (!S.moving || !e.target || e.target.id !== "move-to") return;
+  if (e.key === "Enter") { e.preventDefault(); applyMove(S.moving); }
+  if (e.key === "Escape") { e.preventDefault(); S.moving = null; renderDeck(); }
+});
+
 // ------------------------------------------------------------ drag & drop
 let DRAG = null;
 document.addEventListener("dragstart", (e) => {
@@ -1457,7 +1553,7 @@ document.addEventListener("drop", (e) => {
   S.deck = S.deck.filter(r => r.id !== DRAG);
   const at = row ? S.deck.findIndex(r => r.id === row.dataset.id) : -1;
   S.deck.splice(at < 0 ? S.deck.length : at, 0, entry);
-  DRAG = null; S.dirty = true;
+  DRAG = null; S.dirty = true; S.moving = null;
   renderPool(); renderDeck(); renderTest(); renderBuildResult();
 });
 document.addEventListener("dragend", () => {
