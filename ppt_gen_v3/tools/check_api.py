@@ -438,6 +438,31 @@ def main():
           and len(r.json()["payloads"]) == 1,
           "a wrong answer set can be taken back out")
     client.delete("/api/libraries/demo/payloads/probe2")
+    # A later batch of answer sets can bring a field the earlier ones never had.
+    # Absence is an answer: the field separates the sets that carry it from the
+    # ones that do not, so it is usable and `is answered` is the rule. Counting
+    # only the sets that carry it marked such a field "never varies" and sent
+    # the author away from a rule that works.
+    for i in (1, 2):
+        client.post("/api/libraries/demo/payloads",
+                    json={"name": "shared%d" % i,
+                          "answers": {"Common": "same", "Region": "EMEA"}})
+    client.post("/api/libraries/demo/payloads",
+                json={"name": "extra",
+                      "answers": {"Common": "same", "Region": "EMEA",
+                                  "LateArrival": "yes"}})
+    f = client.get("/api/libraries/demo/fields").json()["fields"]
+    late = f.get("LateArrival") or {}
+    check("a field only some answer sets carry is usable",
+          late.get("varies") is True and late.get("missing") == 2
+          and late.get("seen") == 1,
+          "in %s of %s" % (late.get("seen"), late.get("of")))
+    check("a field every set answers the same way is still not usable",
+          (f.get("Common") or {}).get("varies") is False,
+          "identical everywhere, so it explains nothing")
+    for name in ("shared1", "shared2", "extra"):
+        client.delete("/api/libraries/demo/payloads/%s" % name)
+
     check("DELETE of a missing one is 404",
           client.delete("/api/libraries/demo/payloads/nope").status_code == 404)
 

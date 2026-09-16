@@ -67,6 +67,12 @@ form and the condition dropdowns on the Rules screen both come from it.
 Upload several that differ. A field that has the same value in every answer set
 cannot be a condition, and the screen tells you which those are.
 
+A later batch can bring a field the earlier ones never had — that is fine and
+nothing needs re-uploading. **Not being answered counts as an answer**: a field
+in one of six answer sets separates that one from the other five, so it is
+usable and `is answered` is the condition. The screen shows "in 1 of 6" beside
+such a field, and a payload without the field makes any condition on it false.
+
 Adding more later **adds**; re-uploading a file with the same name **replaces**
 that one.
 

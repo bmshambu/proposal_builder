@@ -77,9 +77,18 @@ def catalogue(payloads):
     `varies` earns its place: a field answered identically in every payload
     cannot explain anything, and a condition on it is always true or always
     false. The UI refuses to pretend otherwise.
+
+    **Not being answered is an answer.** A field that appears in one of six
+    answer sets has one value and still separates that set from the other five
+    perfectly — `is answered` is the condition. Counting only the payloads that
+    carry it would mark it "never varies" and send the author away from a rule
+    that works, so `missing` counts the sets without it and feeds `varies`.
+    `suggest.py` has always read absence this way; this is the same reading.
     """
+    total = 0
     seen = {}
     for _label, payload in payloads:
+        total += 1
         for field, value in flatten(payload).items():
             seen.setdefault(field, []).append(value)
 
@@ -100,12 +109,15 @@ def catalogue(payloads):
             kind = "choice"
         else:
             kind = "text"
+        missing = total - len(values)
         fields[field] = {
             "kind": kind,
             "values": sorted(uniq, key=lambda v: str(v))
                       if kind in ("bool", "choice") else [],
             "eg": uniq[0],
-            "varies": len(uniq) > 1,
+            "varies": len(uniq) > 1 or missing > 0,
             "seen": len(values),
+            "missing": missing,
+            "of": total,
         }
     return fields

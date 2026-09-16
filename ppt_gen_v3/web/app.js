@@ -649,7 +649,8 @@ function editorHTML(row) {
       <b style="font-size:12.5px">Include this slide when</b>
       <select data-f style="max-width:340px">
         <option value=""${field ? "" : " selected"}>always — no condition</option>
-        ${names.map(f => `<option value="${esc(f)}"${f === field ? " selected" : ""}>${esc(label(f))}${S.fields[f].varies === false ? " (never varies)" : ""}</option>`).join("")}
+        ${names.map(f => `<option value="${esc(f)}"${f === field ? " selected" : ""}>${esc(label(f))}${S.fields[f].varies === false ? " (never varies)"
+          : S.fields[f].missing ? ` (in ${S.fields[f].seen} of ${S.fields[f].of})` : ""}</option>`).join("")}
       </select>
       ${field ? `<select data-o>${OPERATORS.map(([k, l]) =>
       `<option value="${k}"${k === op ? " selected" : ""}>${l}</option>`).join("")}</select>` : ""}
@@ -660,6 +661,11 @@ function editorHTML(row) {
       ? `<div class="note warn">Every payload answers this the same way
           (${esc(JSON.stringify(spec.eg))}), so a condition on it is always true
           or always false. Pick a field that varies.</div>`
+      : spec && spec.missing
+      ? `<div class="note">Answered in ${spec.seen} of ${spec.of} answer sets and
+          absent from ${spec.missing}. <b>is answered</b> matches exactly the
+          ${spec.seen} that carry it — a value test only matches the ones that
+          also hold that value.</div>`
       : `<div class="note">Fields and values come from the payloads, so a rule
           cannot quietly fail because a field name was mistyped.</div>`}
     <div class="acts">
@@ -954,6 +960,9 @@ function renderQuestions() {
       <td class="preview">${esc(s.kind === "date" ? humanDate(s.eg) : String(s.eg ?? ""))}</td>
       <td>${s.varies === false
         ? `<span class="pill warn">never varies</span>`
+        : s.missing
+        ? `<span class="pill ok">usable</span>
+           <span class="preview">in ${s.seen} of ${s.of}</span>`
         : `<span class="pill ok">usable</span>`}</td></tr>`;
   }).join("");
 }
