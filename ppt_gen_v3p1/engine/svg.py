@@ -499,14 +499,31 @@ def _unsupported_box(box, label):
             % (x, y, cx, cy, x + cx / 2, y + cy / 2, esc(label)))
 
 
-def _table_svg(tbl, box, theme):
+def _table_cells(tbl, box):
+    """Where every cell of a table sits. -> [(row, col, tc, (x, y, w, h)), ...]
+
+    Shared by the renderer and by `text_map`, so the box an author clicks is
+    the same box the picture was drawn in. Two cells cannot be allowed to
+    disagree about that.
+
+    Widths and heights are proportional and scaled to the frame: `a:tr/@h` is
+    a minimum rather than a promise, and a row of wrapped text can end up
+    taller than it claims.
+
+    A cell continuing a merge (`hMerge`, `vMerge`) holds no content of its own
+    and is skipped; the cell that starts the merge is widened by `gridSpan`
+    and `rowSpan` instead.
+    """
     x, y, cx, cy = box
     cols = [int(c.get("w", 0) or 0) for c in tbl.findall("a:tblGrid/a:gridCol", NS)]
     rows = tbl.findall("a:tr", NS)
     if not cols or not rows:
-        return ""
-    scale = cx / float(sum(cols)) if sum(cols) else 1.0
-    cols = [c * scale for c in cols]
+        return []
+
+    total = float(sum(cols))
+    widths = ([c * (cx / total) for c in cols] if total
+              else [cx / float(len(cols))] * len(cols))
+
     heights = []
     for tr in rows:
         try:
@@ -514,27 +531,43 @@ def _table_svg(tbl, box, theme):
         except ValueError:
             heights.append(0)
     if sum(heights) <= 0:
-        heights = [cy / len(rows)] * len(rows)
+        heights = [cy / float(len(rows))] * len(rows)
     else:                                   # honour proportions, fit the frame
         vscale = cy / float(sum(heights))
         heights = [h * vscale for h in heights]
 
-    parts, cursor_y = [], y
-    for tr, h in zip(rows, heights):
+    out, cursor_y = [], y
+    for r, (tr, h) in enumerate(zip(rows, heights)):
         cursor_x = x
-        for n, tc in enumerate(tr.findall("a:tc", NS)):
-            w = cols[n] if n < len(cols) else (cols[-1] if cols else 0)
-            cell_box = (cursor_x, cursor_y, w, h)
-            fill, alpha = _fill_of(tc.find("a:tcPr", NS), theme)
-            parts.append(
-                '<rect x="%.0f" y="%.0f" width="%.0f" height="%.0f" fill="%s" '
-                'fill-opacity="%.3f" stroke="#D0D5DD" stroke-width="6350"/>'
-                % (cursor_x, cursor_y, w, h, fill or "#FFFFFF",
-                   alpha if fill else 0.0))
-            parts.append(_render_text(tc.find("a:txBody", NS), cell_box, theme,
-                                      default_size=152400))
+        for c, tc in enumerate(tr.findall("a:tc", NS)):
+            w = widths[c] if c < len(widths) else (widths[-1] if widths else 0)
+            if tc.get("hMerge") == "1" or tc.get("vMerge") == "1":
+                cursor_x += w
+                continue
+            try:
+                span = max(1, int(tc.get("gridSpan", 1) or 1))
+                down = max(1, int(tc.get("rowSpan", 1) or 1))
+            except ValueError:
+                span = down = 1
+            cw = sum(widths[c:c + span]) or w
+            ch = sum(heights[r:r + down]) or h
+            out.append((r, c, tc, (cursor_x, cursor_y, cw, ch)))
             cursor_x += w
         cursor_y += h
+    return out
+
+
+def _table_svg(tbl, box, theme):
+    parts = []
+    for _r, _c, tc, cell_box in _table_cells(tbl, box):
+        x, y, w, h = cell_box
+        fill, alpha = _fill_of(tc.find("a:tcPr", NS), theme)
+        parts.append(
+            '<rect x="%.0f" y="%.0f" width="%.0f" height="%.0f" fill="%s" '
+            'fill-opacity="%.3f" stroke="#D0D5DD" stroke-width="6350"/>'
+            % (x, y, w, h, fill or "#FFFFFF", alpha if fill else 0.0))
+        parts.append(_render_text(tc.find("a:txBody", NS), cell_box, theme,
+                                  default_size=152400))
     return "".join(parts)
 
 
@@ -884,3 +917,242 @@ def block_card(lib, block_id):
             "slide": os.path.basename(block.part), "text": texts,
             "placeholders": sorted(block.placeholders),
             "tables": xml.count("<a:tbl>"), "images": xml.count("<p:pic>")}
+
+
+# ---------------------------------------------------------------- text map
+#
+# What an editor needs and `render_slide` cannot give it: exact geometry per
+# text shape, and an address it can write back to.
+#
+# The distinction matters. A shape's box comes straight out of the OOXML and is
+# exact. Where a *word* sits inside that box does not — this module lays text
+# out approximately, well enough to look at and not well enough to click. So an
+# editor draws the real rendered page, puts an exact box over each text shape
+# from here, and only re-flows text inside a box the author has opened. Nothing
+# that decides where the author clicks is guessed.
+
+
+def _runs_with_spans(para):
+    """A paragraph's text, and its runs against that text. -> (text, [run,...])
+
+    Each run carries the span of the paragraph text it occupies, which is the
+    address a later write needs: "characters 7 to 12" resolves to a run and an
+    offset without the caller knowing any OOXML. A `<a:fld>` (a slide number,
+    say) is reported so it can be seen and marked `editable: false`, because
+    PowerPoint owns its text and we must not write into it.
+    """
+    text, runs = "", []
+    for node in para:
+        tag = node.tag.split("}")[-1]
+        if tag == "br":
+            text += "\n"
+            continue
+        if tag not in ("r", "fld"):
+            continue
+        t = node.find("a:t", NS)
+        if t is None:
+            continue
+        body = t.text or ""
+        runs.append({"start": len(text), "end": len(text) + len(body),
+                     "editable": tag == "r"})
+        text += body
+    return text, runs
+
+
+def _group_transform(grp):
+    """-> (x, y, sx, sy, ox, oy) placing a group's child space on the slide.
+
+    A group re-bases its children: their offsets are in the group's own
+    coordinate space. Without this their boxes land somewhere else entirely,
+    which is worse than not offering them — an author would mark the wrong
+    words with complete confidence.
+    """
+    grp_pr = grp.find("p:grpSpPr", NS)
+    xfrm = grp_pr.find("a:xfrm", NS) if grp_pr is not None else None
+    if xfrm is None:
+        return None
+    off, ext = xfrm.find("a:off", NS), xfrm.find("a:ext", NS)
+    ch_off, ch_ext = xfrm.find("a:chOff", NS), xfrm.find("a:chExt", NS)
+    if off is None or ext is None or ch_off is None or ch_ext is None:
+        return None
+    try:
+        ccx = int(ch_ext.get("cx", 1)) or 1
+        ccy = int(ch_ext.get("cy", 1)) or 1
+        return (int(off.get("x", 0)), int(off.get("y", 0)),
+                float(int(ext.get("cx", 1))) / ccx,
+                float(int(ext.get("cy", 1))) / ccy,
+                int(ch_off.get("x", 0)), int(ch_off.get("y", 0)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _place(transforms, box):
+    """Map a box up through the groups it sits inside, innermost first."""
+    x, y, cx, cy = box
+    for (gx, gy, sx, sy, ox, oy) in reversed(transforms):
+        x = gx + (x - ox) * sx
+        y = gy + (y - oy) * sy
+        cx, cy = cx * sx, cy * sy
+    return [int(round(x)), int(round(y)), int(round(cx)), int(round(cy))]
+
+
+def _paragraphs_of(tx_body, ordinal=None):
+    """Every paragraph of a `<p:txBody>` that has something to mark.
+
+    `at` is the paragraph's ordinal within the whole slide part. That is the
+    address the writer resolves, so it has to be counted over the file rather
+    than over the shape.
+    """
+    out = []
+    if tx_body is None:
+        return out
+    for i, para in enumerate(tx_body.findall("a:p", NS)):
+        text, runs = _runs_with_spans(para)
+        if not text.strip():
+            continue
+        # A block marker is machinery, not content: it is stripped out of every
+        # built deck, so offering it to an author would be offering to mark
+        # text nobody will ever see.
+        if placeholders.BLOCK_MARKER.search(text):
+            continue
+        out.append({"index": i, "at": (ordinal or {}).get(id(para)),
+                    "text": text, "runs": runs,
+                    "placeholders": sorted(set(
+                        placeholders.PLACEHOLDER.findall(text)))})
+    return out
+
+
+def _frame_box(frame):
+    """A graphic frame carries its own `<p:xfrm>` rather than a shape's."""
+    xfrm = frame.find("p:xfrm", NS)
+    if xfrm is None:
+        return None
+    off, ext = xfrm.find("a:off", NS), xfrm.find("a:ext", NS)
+    if off is None or ext is None:
+        return None
+    try:
+        return [int(off.get("x", 0)), int(off.get("y", 0)),
+                int(ext.get("cx", 0)), int(ext.get("cy", 0))]
+    except ValueError:
+        return None
+
+
+def text_map(lib, part):
+    """Every markable text shape on one slide, with its box and its text.
+
+    -> {"part", "width", "height", "shapes": [...], "unreachable": [...]}
+
+    `unreachable` names text this cannot offer yet — a table, a group that does
+    not say where its children sit — so the gap is visible in the UI instead of
+    text simply not being there and nobody knowing why.
+    """
+    size = _slide_size(lib)
+    # Not stripped: the writer addresses a paragraph by its ordinal in the
+    # part, so the reader has to count the same paragraphs the file has. A
+    # marker shape is skipped when emitting instead.
+    slide = _parse(lib, part)
+    if slide is None:
+        raise ValueError("could not parse %s" % part)
+
+    # Document order, which is the order `A_P` finds them in the XML too.
+    ordinal = {}
+    for n, para in enumerate(slide.iter(_q("a:p"))):
+        ordinal[id(para)] = n
+
+    layout_part = _first_rel(_rels_map(lib, part), "slideLayout")
+    layout = _parse(lib, layout_part) if layout_part else None
+    master_part = (_first_rel(_rels_map(lib, layout_part), "slideMaster")
+                   if layout_part else None)
+    master = _parse(lib, master_part) if master_part else None
+
+    # Layout wins over master, the way PowerPoint resolves it.
+    inherited = {}
+    inherited.update(_placeholder_boxes(master))
+    inherited.update(_placeholder_boxes(layout))
+
+    shapes, unreachable = [], []
+
+    def box_of(sp):
+        xf = _xfrm_of(sp.find("p:spPr", NS))
+        if xf:
+            return list(xf[:4]), xf[4]
+        key = _ph_key(sp)
+        if key:
+            for cand in (key, (key[0], None), (None, key[1])):
+                if cand in inherited:
+                    return list(inherited[cand]), 0
+        return None, 0
+
+    def walk(tree, transforms):
+        for el in tree:
+            tag = el.tag.split("}")[-1]
+
+            if tag == "grpSp":
+                moved = _group_transform(el)
+                if moved is None:
+                    unreachable.append({
+                        "what": "group", "name": _shape_name(el),
+                        "why": "this group does not say where its children sit"})
+                    continue
+                walk(el, transforms + [moved])
+                continue
+
+            if tag == "graphicFrame":
+                # A fee schedule is a table, and a fee schedule is exactly where
+                # the numbers a partner cares about live. Skipping tables would
+                # leave the author back in PowerPoint for the one slide that
+                # matters most.
+                tbl = el.find("a:graphic/a:graphicData/a:tbl", NS)
+                if tbl is None:
+                    continue
+                frame_box = _frame_box(el)
+                if frame_box is None:
+                    unreachable.append({
+                        "what": "table", "name": _shape_name(el),
+                        "why": "this table does not say where it sits"})
+                    continue
+                node = el.find("p:nvGraphicFramePr/p:cNvPr", NS)
+                frame_id = node.get("id") if node is not None else None
+                frame_name = _shape_name(el)
+                for row, col, tc, cell in _table_cells(tbl, frame_box):
+                    cell_paras = _paragraphs_of(tc.find("a:txBody", NS), ordinal)
+                    if not cell_paras:
+                        continue
+                    shapes.append({
+                        "kind": "cell", "id": frame_id,
+                        "row": row, "col": col,
+                        "name": "%s r%dc%d" % (frame_name, row + 1, col + 1),
+                        "box": _place(transforms,
+                                      [int(round(v)) for v in cell]),
+                        "rot": 0, "paragraphs": cell_paras})
+                continue
+
+            if tag != "sp":
+                continue
+            body = el.find("p:txBody", NS)
+            if body is None:
+                continue
+
+            box, rot = box_of(el)
+            if box is None:
+                unreachable.append({
+                    "what": "shape", "name": _shape_name(el),
+                    "why": "no position on the slide, its layout or its master"})
+                continue
+
+            paragraphs = _paragraphs_of(body, ordinal)
+            if not paragraphs:
+                continue
+
+            node = el.find("p:nvSpPr/p:cNvPr", NS)
+            shapes.append({
+                "kind": "shape",
+                "id": node.get("id") if node is not None else None,
+                "name": _shape_name(el),
+                "box": _place(transforms, box), "rot": rot,
+                "paragraphs": paragraphs})
+
+    tree = slide.find("p:cSld/p:spTree", NS)
+    walk(tree if tree is not None else [], [])
+    return {"part": part, "width": size[0], "height": size[1],
+            "shapes": shapes, "unreachable": unreachable}

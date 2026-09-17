@@ -24,8 +24,9 @@
     <span class="role">author</span>
     <button data-tab="library" class="on">1 &middot; Slides</button>
     <button data-tab="questions">2 &middot; Questions</button>
-    <button data-tab="rules">3 &middot; Rules</button>
-    <button data-tab="mapping">4 &middot; Values</button>
+    <button data-tab="mark">3 &middot; Mark text</button>
+    <button data-tab="rules">4 &middot; Rules</button>
+    <button data-tab="mapping">5 &middot; Values</button>
     <!-- Comparing against Templafy is an action you take from wherever you
          are, not a step in the sequence, so it lives on the button in the
          header rather than as a fifth numbered tab. -->
@@ -55,18 +56,22 @@
     <div class="pad">
       <div class="dropzone" id="dropzone">
         <div class="dz-icon">&#8681;</div>
-        <div class="dz-main">Drop the <b>.pptx</b> and its <b>.pdf</b> here</div>
-        <div class="dz-sub">or <button class="btn linky" id="choose">choose files</button>
+        <div class="dz-main">Drop the <b>.pptx</b> here</div>
+        <div class="dz-sub">or <button class="btn linky" id="choose">choose a file</button>
           &mdash; the deck is copied verbatim and inspected; nothing in it is
-          modified</div>
+          modified. A <b>.pdf</b> is optional: one is made for you.</div>
       </div>
 
       <!-- The PDF is what the deck viewer previews from. A deck is assembled by
            copying slides out of the library, so its preview is assembled by
            copying pages out of a PDF of that same library - which means nothing
-           has to convert anything at render time, on any platform. Made once by
-           tools/make_library_pdf.py, not here: converting needs PowerPoint, and
-           the point of the PDF is that the deployed app never does. -->
+           has to convert anything at render time, on any platform.
+
+           It used to have to be made elsewhere and brought along, because
+           converting meant PowerPoint on somebody's desk. It does not any
+           more: Graph converts it at import with nothing installed. One can
+           still be uploaded, and when it is, it wins - a PDF out of real
+           PowerPoint is a truer picture than Office Online's. -->
       <div class="staged" id="staged"></div>
 
       <!-- The name is asked for at import, not derived from the filename.
@@ -110,6 +115,27 @@
      is the author's job; it was on the Build screen, which meant an author had
      to detour through a screen that is not theirs to get started. -->
 <section class="screen" id="screen-questions">
+
+  <!-- The form comes first because most authors are never going to hand-write
+       JSON, and the questions are known before any answer set exists: a
+       placeholder bound to a field is a question somebody will be asked. The
+       file drop stays below it, for bulk and for people who prefer it. -->
+  <div class="panel">
+    <h2>Add an answer set <span class="count" id="qf-count"></span>
+      <span class="hint">fill it in the way a colleague would &mdash; no file
+        needed</span></h2>
+    <div class="pad">
+      <div class="notice ok" id="qf-note"></div>
+      <div id="qf-form"></div>
+      <div class="rulebar" id="qf-bar" hidden>
+        <label class="fld"><span>Call this set</span>
+          <input type="text" id="qf-name" placeholder="new_client_example"></label>
+        <span style="flex:1"></span>
+        <button class="btn primary" id="qf-save">Save this answer set</button>
+      </div>
+    </div>
+  </div>
+
   <div class="panel">
     <h2>The questions users will answer
       <span class="hint">read from real answer sets — nothing is typed by hand</span></h2>
@@ -135,6 +161,44 @@
         <th>Example</th><th></th></tr></thead>
       <tbody id="q-body"></tbody>
     </table>
+  </div>
+</section>
+
+<!-- ============================================================== MARK
+     Where an author says which words change for each client, without typing
+     `{{ }}` anywhere. The picture is the real rendered page out of the library
+     PDF; the boxes over it come from the OOXML and are exact, so a click lands
+     on the shape the author meant rather than near it. Text is re-flowed only
+     inside a shape they have opened - svg.py lays text out approximately,
+     which is fine to look at and wrong to click. -->
+<section class="screen" id="screen-mark">
+  <div class="panel">
+    <h2>Mark what changes <span class="count" id="mk-all-count"></span>
+      <span class="hint">open a text box, then drag across the words that
+        differ from one client to the next</span></h2>
+
+    <div class="rulebar">
+      <button class="btn" id="mk-prev" title="Previous slide">&larr;</button>
+      <button class="btn" id="mk-next" title="Next slide">&rarr;</button>
+      <b id="mk-title"></b>
+      <span class="fld-note" id="mk-count"></span>
+      <span style="flex:1"></span>
+      <button class="btn" id="mk-values">Showing: example values</button>
+      <!-- The original library is never written to. A save makes a new one,
+           so a mistake is recoverable by going back to the old library. -->
+      <button class="btn primary" id="mk-save" disabled>Save as a new library</button>
+    </div>
+
+    <div class="mk-split">
+      <div class="mk-stage" id="mk-stage"></div>
+      <aside class="mk-rail">
+        <h3>On this slide</h3>
+        <div id="mk-here"></div>
+        <h3>Everything you have set up</h3>
+        <div id="mk-all"></div>
+        <p class="fld-note" id="mk-tally"></p>
+      </aside>
+    </div>
   </div>
 </section>
 
@@ -322,6 +386,13 @@
 </section>
 
 </main>
+
+<div class="mk-bar" id="mk-bar" hidden>
+  <span class="q" id="mk-bar-text"></span>
+  <button class="btn primary" id="mk-go">Make this a field</button>
+  <button class="btn" id="mk-x">Cancel</button>
+</div>
+
 
 <!-- Collapsed by default: the slides are what an author is judging, and an
      always-open answer panel takes a quarter of the screen away from them.

@@ -204,6 +204,9 @@ function showTab(tab) {
   document.querySelectorAll("[data-goto]").forEach(b =>
     b.classList.toggle("here", b.dataset.goto === tab));
   $("testbar").hidden = tab !== "rules";
+  // The slide text is fetched when the screen is opened, not at boot: an
+  // author who never marks anything should never pay for it.
+  if (tab === "mark") renderMark();
   fitMain();
 }
 document.querySelectorAll(".tabs button").forEach(b =>
@@ -366,6 +369,9 @@ async function renderLibrary() {
  * staged first and imported together, rather than the .pptx importing on drop
  * and the .pdf arriving too late to be part of it.
  */
+// Still accepts a .pdf: an author who has one made by PowerPoint should be
+// able to use it, because it is a truer picture than a converted one. It is
+// no longer asked for.
 const libPicker = filePicker(".pptx,.pdf", stageLibraryFile);
 $("choose").onclick = () => libPicker.click();
 dropTarget($("dropzone"), ".pptx,.pdf", stageLibraryFile);
@@ -391,7 +397,8 @@ function renderStaged() {
   box.innerHTML =
     row("library .pptx", st.pptx, "required")
     + row("library .pdf", st.pdf,
-      "optional — without it the viewer falls back to an approximation")
+      "optional — one is made on import. Bring your own and it wins: a PDF "
+      + "out of PowerPoint is a truer picture than a converted one")
     + `<div class="stage-go">
          <button class="btn primary" id="stage-import"
                  ${st.pptx ? "" : "disabled"}>Import library</button>
@@ -907,7 +914,200 @@ async function dropSample(labelName) {
   } catch (err) { flash(err.message, "bad"); }
 }
 
+// One question, one control. Both forms render through this: the one a
+// colleague fills in to build a deck, and the one an author fills in to make
+// an example answer set. Two implementations would drift, and the drift would
+// show as a field that behaves differently depending which screen you are on.
+function question(f, spec, cur, attr, idp) {
+  spec = spec || {};
+  const p = idp || "q";
+  if (spec.kind === "bool")
+    return `<label class="q bool"><input type="checkbox" ${attr}="${esc(f)}"${cur === true ? " checked" : ""}>
+          <span class="qt">${esc(label(f))}</span></label>`;
+  let ctl;
+  if (spec.kind === "date")
+    ctl = `<input type="date" ${attr}="${esc(f)}" data-date value="${esc(toISO(cur))}">`;
+  else if ((spec.values || []).length && spec.values.length <= 12)
+    ctl = `<select ${attr}="${esc(f)}"><option value=""></option>${spec.values.map(v =>
+      `<option${String(v) === String(cur) ? " selected" : ""}>${esc(v)}</option>`).join("")}</select>`;
+  else if ((spec.values || []).length)
+    ctl = `<input type="text" ${attr}="${esc(f)}" list="${p}-${esc(f)}" value="${esc(cur ?? "")}"
+                 placeholder="${spec.values.length} options">
+               <datalist id="${p}-${esc(f)}">${spec.values.map(v => `<option value="${esc(v)}">`).join("")}</datalist>`;
+  else
+    ctl = `<input type="text" ${attr}="${esc(f)}" value="${esc(cur ?? "")}"
+                 placeholder="${esc(spec.eg ?? "")}">`;
+  return `<label class="q"><span class="qt" title="${esc(f)}">${esc(label(f))}</span>${ctl}</label>`;
+}
+
+// Every field this library will ask somebody for. The catalogue knows the ones
+// that have appeared in an answer set; the placeholders know the rest. A
+// library that has just been marked up has no answer sets at all, so without
+// the second half the form would be empty exactly when it is most needed.
+function asked() {
+  const out = {};
+  Object.keys(S.fields || {}).forEach(f => out[f] = S.fields[f]);
+  ((S.inspect && S.inspect.placeholders) || []).forEach(name => {
+    const bind = (S.bindings || {})[`{{${name}}}`];
+    // A literal or a data source is filled in without asking anybody.
+    if (bind && bind.from && bind.from !== "field") return;
+    const field = (bind && bind.field) || name;
+    if (!out[field]) out[field] = { kind: "text", values: [], eg: "" };
+  });
+  return out;
+}
+
+const QF = {};            // what the author has typed into the form
+const QFOFF = new Set();  // questions they have taken off it
+const QFADD = new Set();  // and ones they have put on
+
+// Which fields the deck itself needs somebody to answer. Taking one of these
+// off the form is allowed - it is the author's form - but it is worth saying
+// what it costs, because the placeholder it feeds will come out unfilled.
+function neededByDeck() {
+  const need = new Set();
+  ((S.inspect && S.inspect.placeholders) || []).forEach(name => {
+    const bind = (S.bindings || {})[`{{${name}}}`];
+    if (bind && bind.from && bind.from !== "field") return;
+    need.add((bind && bind.field) || name);
+  });
+  return need;
+}
+
+function renderQuestionForm() {
+  // The derived list is a starting point, not a cage: the placeholders say
+  // what the deck needs, and the author says what this answer set carries.
+  // Those are not always the same thing - a payload that arrives without a
+  // key is the ordinary case, not an error.
+  const fields = asked();
+  QFADD.forEach(f => {
+    if (!fields[f]) fields[f] = { kind: "text", values: [], eg: "" };
+  });
+  const names = Object.keys(fields).filter(f => !QFOFF.has(f)).sort();
+  $("qf-count").textContent = names.length ? `(${names.length})` : "";
+  $("qf-bar").hidden = !names.length;
+
+  const fresh = names.filter(f => !S.fields[f]);
+  const need = neededByDeck();
+  const dropped = [...QFOFF].filter(f => need.has(f));
+  $("qf-note").innerHTML = !names.length
+    ? `<b>Nothing to ask yet</b> Mark some text on the Mark text screen, or
+       drop an answer set below, and the questions appear here.`
+    : `<b>${names.length} question(s)</b> This is exactly what a colleague is
+       asked when they build a deck.` + (fresh.length
+      ? ` ${fresh.length} of them ${fresh.length === 1 ? "has" : "have"} never
+         been answered &mdash; filling this in is what teaches the tool what
+         they look like.` : "");
+  $("qf-note").className = "notice " + (dropped.length ? "warn" : "ok");
+  if (dropped.length) {
+    $("qf-note").innerHTML += `<br><b>${dropped.map(f =>
+      esc(label(f))).join(", ")}</b> ${dropped.length === 1 ? "is" : "are"} used
+      on a slide. Leaving ${dropped.length === 1 ? "it" : "them"} off is fine
+      for this answer set, but the placeholder stays unfilled unless you give
+      it a fixed value on the Values screen.`;
+  }
+
+  $("qf-form").innerHTML = (names.length
+    ? `<div class="formgrid">` + names.map(f =>
+      `<div class="qfrow">${question(f, fields[f], QF[f], "data-newans", "qf")}`
+      + `<button class="x qf-x" data-qdrop="${esc(f)}"
+           title="Do not ask this one" aria-label="Remove ${esc(f)}"
+           >&times;</button></div>`).join("") + `</div>`
+    : "")
+    + `<div class="qfadd">
+        <input type="text" id="qf-new" autocomplete="off"
+          placeholder="Add another question, e.g. Engagement partner">
+        <button class="btn" id="qf-add" type="button">Add</button>
+        ${QFOFF.size ? `<span style="flex:1"></span>
+          <button class="btn linky" id="qf-back" type="button">Bring back
+            ${QFOFF.size} removed</button>` : ""}
+      </div>`;
+}
+
+function qfAdd() {
+  const box = document.getElementById("qf-new");
+  const raw = ((box && box.value) || "").trim();
+  if (!raw) { if (box) box.focus(); return; }
+  const key = raw.replace(/[^A-Za-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
+  if (!key) { box.focus(); return; }
+  const flat = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, "");
+  // The same guard as the marking picker: a second `Client` alongside
+  // `client` is two questions for one thing, and neither fills reliably.
+  const clash = Object.keys(asked()).concat([...QFADD])
+    .find(f => flat(f) === flat(key));
+  if (clash) {
+    const was = QFOFF.delete(clash);
+    renderQuestionForm();
+    flash(was ? `"${label(clash)}" is back on the form.`
+      : `"${label(clash)}" is already on the form.`, was ? "ok" : "warn");
+    return;
+  }
+  QFADD.add(key);
+  QFOFF.delete(key);
+  renderQuestionForm();
+  const again = document.getElementById("qf-new");
+  if (again) again.focus();
+}
+
+document.addEventListener("click", (ev) => {
+  const off = ev.target.closest("[data-qdrop]");
+  if (off) {
+    QFOFF.add(off.dataset.qdrop);
+    QFADD.delete(off.dataset.qdrop);
+    delete QF[off.dataset.qdrop];
+    renderQuestionForm();
+    return;
+  }
+  if (ev.target.closest("#qf-add")) { qfAdd(); return; }
+  if (ev.target.closest("#qf-back")) { QFOFF.clear(); renderQuestionForm(); }
+});
+
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter" && ev.target && ev.target.id === "qf-new") {
+    ev.preventDefault();
+    qfAdd();
+  }
+});
+
+function qfTyped(ev) {
+  const t = ev.target;
+  if (!t || !t.dataset || t.dataset.newans === undefined) return;
+  QF[t.dataset.newans] = t.type === "checkbox" ? t.checked
+    : (t.dataset.date !== undefined ? fromISO(t.value) : t.value);
+}
+document.addEventListener("input", qfTyped);
+document.addEventListener("change", qfTyped);
+
+$("qf-save").onclick = async () => {
+  const name = ($("qf-name").value || "").trim();
+  if (!name) { $("qf-name").focus(); return; }
+  // Blanks are dropped rather than saved as "". A field nobody answered has
+  // not been seen, and recording it as empty would put a blank option into
+  // every condition dropdown in the tool.
+  const answers = {};
+  Object.keys(QF).forEach(f => {
+    const v = QF[f];
+    if (v !== "" && v !== null && v !== undefined) answers[f] = v;
+  });
+  if (!Object.keys(answers).length) {
+    flash("Nothing filled in yet.", "warn"); return;
+  }
+  try {
+    const cat = await sendJSON(`/api/libraries/${S.lib}/payloads`,
+      { name, answers }, "POST");
+    S.fields = cat.fields; S.presets = cat.payloads; S.shared = cat.shared;
+    Object.keys(QF).forEach(f => delete QF[f]);
+    $("qf-name").value = "";
+    fillPresets();
+    renderQuestions(); renderRules(); renderMapping(); renderBuild();
+    flash(`${cat.replaced ? "Replaced" : "Saved"} ${name} — `
+      + `${Object.keys(answers).length} answer(s), `
+      + `${Object.keys(S.fields).length} field(s) now`, "ok");
+  } catch (err) { flash(err.message, "bad"); }
+};
+
 function renderQuestions() {
+  renderQuestionForm();
   const names = Object.keys(S.fields);
   // Name each one and let it be removed. Adding is by name - a new name is
   // kept alongside, the same name replaces - and a wrong set is not harmless:
@@ -1046,26 +1246,8 @@ function renderBuild() {
   $("build-src").textContent = S.lib
     ? `${S.lib} · ${names.length} question(s)` : "";
   $("answers-form").innerHTML = names.length
-    ? `<div class="formgrid">` + names.map(f => {
-      const spec = S.fields[f], cur = S.answers[f];
-      if (spec.kind === "bool")
-        return `<label class="q bool"><input type="checkbox" data-ans="${esc(f)}"${cur === true ? " checked" : ""}>
-          <span class="qt">${esc(label(f))}</span></label>`;
-      let ctl;
-      if (spec.kind === "date")
-        ctl = `<input type="date" data-ans="${esc(f)}" data-date value="${esc(toISO(cur))}">`;
-      else if ((spec.values || []).length && spec.values.length <= 12)
-        ctl = `<select data-ans="${esc(f)}"><option value=""></option>${spec.values.map(v =>
-          `<option${String(v) === String(cur) ? " selected" : ""}>${esc(v)}</option>`).join("")}</select>`;
-      else if ((spec.values || []).length)
-        ctl = `<input type="text" data-ans="${esc(f)}" list="q-${esc(f)}" value="${esc(cur ?? "")}"
-                 placeholder="${spec.values.length} options">
-               <datalist id="q-${esc(f)}">${spec.values.map(v => `<option value="${esc(v)}">`).join("")}</datalist>`;
-      else
-        ctl = `<input type="text" data-ans="${esc(f)}" value="${esc(cur ?? "")}"
-                 placeholder="${esc(spec.eg ?? "")}">`;
-      return `<label class="q"><span class="qt" title="${esc(f)}">${esc(label(f))}</span>${ctl}</label>`;
-    }).join("") + `</div>`
+    ? `<div class="formgrid">` + names.map(f =>
+      question(f, S.fields[f], S.answers[f], "data-ans")).join("") + `</div>`
     : `<p class="fld-note">No questions yet — upload a payload and the form is
        built from the fields it contains.</p>`;
   renderBuildResult();
@@ -1573,6 +1755,499 @@ document.addEventListener("dragend", () => {
 window.addEventListener("beforeunload", (e) => {
   if (S.dirty) { e.preventDefault(); e.returnValue = ""; }
 });
+
+// ============================================================ MARK TEXT
+//
+// Where an author says which words change for each client, without typing
+// `{{ }}` or inventing a name twice.
+//
+// The picture is the real rendered page out of the library PDF. The boxes over
+// it come from the OOXML and are exact, so a click lands on the shape the
+// author meant. Text is re-flowed only inside a shape they have opened, and
+// only while it is open: `engine/svg.py` lays text out approximately, which is
+// fine to look at and wrong to click.
+//
+// Nothing is written anywhere until Save. Marks live here, in the browser.
+
+const MK = {
+  index: 1, map: null, marks: [], open: null, sel: null,
+  showValues: true, dragging: false,
+};
+
+const mkKey = (s) => [s.kind, s.id, s.row ?? "", s.col ?? ""].join(":");
+const mkNorm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+function mkTokens(text) {
+  const out = [], re = /\s+|[^\s]+/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    out.push({ t: m[0], at: m.index, space: /^\s/.test(m[0]) });
+  }
+  return out;
+}
+
+const mkHere = () => MK.marks.filter(m => m.slide === MK.index);
+const mkUses = (name) => MK.marks.filter(m => m.name === name).length;
+
+function mkNames() {
+  // Everything a placeholder could be called here: fields the payloads know
+  // about, placeholders already in the library, and anything marked in this
+  // session. One list, so the same thing cannot be invented twice.
+  const seen = {};
+  Object.keys(S.fields || {}).forEach(f => seen[f] = { name: f, from: "field" });
+  Object.keys(S.bindings || {}).forEach(k => {
+    const n = k.replace(/[{}]/g, "").trim();
+    if (n) seen[n] = seen[n] || { name: n, from: "existing" };
+  });
+  MK.marks.forEach(m => seen[m.name] = seen[m.name] || { name: m.name, from: "new" });
+  return Object.values(seen).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function mkSample(name) {
+  const f = (S.fields || {})[name];
+  const vals = (f && (f.values || f.seen)) || [];
+  return vals.length ? String(vals[0]) : "";
+}
+
+// --------------------------------------------------------------- drawing
+async function renderMark() {
+  if (!S.lib) { $("mk-stage").innerHTML = ""; return; }
+  const count = (S.inspect && S.inspect.blocks.length) || 0;
+  if (MK.index > count) MK.index = 1;
+  $("mk-count").textContent = count ? `Slide ${MK.index} of ${count}` : "";
+  try {
+    MK.map = await getJSON(`/api/libraries/${S.lib}/slides/${MK.index}/text`);
+  } catch (err) { flash(err.message, "bad"); return; }
+  $("mk-title").textContent = MK.map.title || MK.map.block || "";
+  MK.open = null; MK.sel = null;
+  mkDrawStage();
+  mkRail();
+}
+
+function mkDrawStage() {
+  const m = MK.map;
+  if (!m) return;
+  const pct = (v, total) => (100 * v / total).toFixed(4) + "%";
+  const boxes = m.shapes.map((s, i) => {
+    const [x, y, cx, cy] = s.box;
+    const mine = mkHere().filter(k => k.key === mkKey(s));
+    const open = MK.open === i;
+    return `<div class="mk-box${mine.length ? " has" : ""}${open ? " open" : ""}"
+      data-i="${i}" style="left:${pct(x, m.width)};top:${pct(y, m.height)};
+      width:${pct(cx, m.width)};height:${pct(cy, m.height)}"
+      title="${esc(s.name)}">${open ? mkShapeHTML(s, i)
+        : (mine.length ? `<span class="mk-badge">${mine.length}</span>` : "")}</div>`;
+  }).join("");
+
+  $("mk-stage").innerHTML =
+    `<img id="mk-img" alt="Slide ${MK.index}"
+       src="/api/libraries/${S.lib}/slides/${MK.index}/png">
+     <div class="mk-layer">${boxes}</div>` +
+    (m.unreachable && m.unreachable.length
+      ? `<div class="mk-gap">${m.unreachable.length} thing(s) here cannot be
+         marked yet: ${esc(m.unreachable.map(u => u.why).join("; "))}</div>` : "");
+  $("mk-img").onerror = () => {
+    $("mk-stage").insertAdjacentHTML("afterbegin",
+      `<div class="mk-nopdf">This library has no PDF, so there is no true
+       picture of the slide to mark up. The boxes below are still exact.</div>`);
+  };
+}
+
+function mkShapeHTML(shape, i) {
+  return shape.paragraphs.map(p => {
+    const mine = mkHere().filter(k => k.key === mkKey(shape) && k.para === p.index)
+      .sort((a, b) => a.from - b.from);
+    const toks = mkTokens(p.text);
+    let out = "", n = 0;
+    while (n < toks.length) {
+      const tok = toks[n];
+      const mark = mine.find(k => k.from === tok.at);
+      if (mark) {
+        const shown = MK.showValues && mark.sample ? mark.sample : mark.name;
+        out += `<span class="mk-fx" data-mark="${mark.id}"
+                 data-tag="${esc(mark.name)}">${esc(shown)}</span>`;
+        while (n < toks.length && toks[n].at < mark.to) n++;
+        continue;
+      }
+      if (tok.space) { out += esc(tok.t); n++; continue; }
+      const on = MK.sel && MK.sel.shape === i && MK.sel.para === p.index
+        && n >= MK.sel.from && n <= MK.sel.to;
+      out += `<span class="mk-w${on ? " sel" : ""}" data-w="${n}"
+               data-para="${p.index}">${esc(tok.t)}</span>`;
+      n++;
+    }
+    return `<div class="mk-p" data-para="${p.index}">${out}</div>`;
+  }).join("");
+}
+
+// ------------------------------------------------------------- selection
+function mkSelText() {
+  if (!MK.sel) return "";
+  const p = MK.map.shapes[MK.sel.shape].paragraphs
+    .find(x => x.index === MK.sel.para);
+  const toks = mkTokens(p.text);
+  return p.text.slice(toks[MK.sel.from].at,
+    toks[MK.sel.to].at + toks[MK.sel.to].t.length);
+}
+
+function mkSelRange() {
+  const p = MK.map.shapes[MK.sel.shape].paragraphs
+    .find(x => x.index === MK.sel.para);
+  const toks = mkTokens(p.text);
+  return [toks[MK.sel.from].at, toks[MK.sel.to].at + toks[MK.sel.to].t.length];
+}
+
+function mkBar() {
+  const bar = $("mk-bar");
+  const nodes = $("mk-stage").querySelectorAll(".mk-w.sel");
+  if (!MK.sel || !nodes.length) { bar.hidden = true; return; }
+  const a = nodes[0].getBoundingClientRect();
+  const b = nodes[nodes.length - 1].getBoundingClientRect();
+  $("mk-bar-text").textContent = "“" + mkSelText().trim() + "”";
+  bar.hidden = false;
+  const w = bar.offsetWidth;
+  const cx = (Math.min(a.left, b.left) + Math.max(a.right, b.right)) / 2;
+  bar.style.left = Math.max(12, Math.min(cx - w / 2, innerWidth - w - 12)) + "px";
+  let top = Math.max(a.bottom, b.bottom) + 8;
+  if (top + bar.offsetHeight > innerHeight - 12) {
+    top = Math.min(a.top, b.top) - bar.offsetHeight - 8;
+  }
+  bar.style.top = Math.max(12, top) + "px";
+}
+
+function mkClearSel() { MK.sel = null; $("mk-bar").hidden = true; mkDrawStage(); }
+
+// ---------------------------------------------------------------- picker
+function mkPick(editing) {
+  const text = editing ? editing.text : mkSelText();
+  // A value the payloads have actually seen is the strongest hint available,
+  // and it costs nothing: the catalogue is already loaded.
+  const guess = mkNames().find(n => {
+    const f = (S.fields || {})[n.name];
+    const vals = (f && (f.values || f.seen)) || [];
+    return vals.some(v => String(v).trim() === text.trim());
+  });
+
+  const row = (n, tag) => {
+    const sample = mkSample(n.name);
+    const used = mkUses(n.name);
+    return `<button class="mk-opt" data-pick="${esc(n.name)}" type="button">
+      <span class="t"><b>${esc(label(n.name))}</b><span>${esc(sample || "no example yet")}${
+        used ? ` &middot; used ${used}× here` : ""}</span></span>
+      ${tag ? `<span class="mk-sug">${tag}</span>` : ""}</button>`;
+  };
+
+  const list = () => {
+    const names = mkNames();
+    let h = "";
+    if (guess && !editing) {
+      h += `<div class="mk-sep">Looks like</div>${row(guess, "suggested")}`;
+      h += `<div class="mk-sep">Or one you already have</div>`;
+    } else {
+      h += `<div class="mk-sep">One you already have</div>`;
+    }
+    h += names.filter(n => !guess || editing || n.name !== guess.name)
+      .map(n => row(n, n.from === "new" ? "new" : "")).join("")
+      || `<p class="mk-empty">No fields yet. Upload a payload on the Questions
+          screen, or add one below.</p>`;
+    h += `<div class="mk-sep">Not on the list</div>
+      <button class="mk-opt" data-new="field" type="button"><span class="t">
+        <b>Add a new field&hellip;</b><span>Colleagues will be asked for it on
+        the build form</span></span></button>
+      <button class="mk-opt" data-new="literal" type="button"><span class="t">
+        <b>The same on every proposal</b><span>A fixed value &mdash; nobody is
+        asked for it</span></span></button>`;
+    return h;
+  };
+
+  const scrim = document.createElement("div");
+  scrim.className = "mk-scrim";
+  scrim.innerHTML = `<div class="mk-sheet" role="dialog" aria-modal="true"
+      aria-label="What is this text?">
+    <div class="mk-sheet-head"><h3>What is this?</h3>
+      <div class="mk-quote">${esc(text)}</div></div>
+    <div class="mk-sheet-body" id="mk-body">${list()}</div>
+    <div class="mk-sheet-foot">
+      ${editing ? `<button class="btn" data-unmark="1">Unmark</button>`
+        : `<button class="btn" data-back="1">Change selection</button>`}
+      <span style="flex:1"></span>
+      <button class="btn" data-close="1">Cancel</button></div></div>`;
+  document.body.appendChild(scrim);
+  $("mk-bar").hidden = true;
+
+  const close = () => { scrim.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (e) => { if (e.key === "Escape") { close(); mkClearSel(); } };
+  document.addEventListener("keydown", onKey);
+
+  function commit(name, binding, sample) {
+    if (editing) {
+      Object.assign(editing, { name, binding, sample });
+    } else {
+      const [from, to] = mkSelRange();
+      const shape = MK.map.shapes[MK.sel.shape];
+      const para = shape.paragraphs.find(x => x.index === MK.sel.para);
+      MK.marks.push({
+        id: "m" + (Date.now() + MK.marks.length),
+        slide: MK.index, key: mkKey(shape), shapeName: shape.name,
+        para: MK.sel.para, from, to, text, name, binding, sample,
+        // the address the server resolves: which part, which paragraph in it,
+        // and the text that paragraph held when it was read. The last one is
+        // what catches a library that moved on underneath the browser.
+        part: MK.map.part, at: para.at, expect: para.text,
+      });
+    }
+    close(); MK.sel = null; mkDrawStage(); mkRail(); MK.dirty = true;
+  }
+
+  scrim.addEventListener("click", (ev) => {
+    const pick = ev.target.closest("[data-pick]");
+    if (pick) {
+      const name = pick.dataset.pick;
+      return commit(name, { from: "field", field: name }, mkSample(name));
+    }
+    const add = ev.target.closest("[data-new]");
+    if (add) return mkNewForm(scrim, add.dataset.new, text, commit);
+    if (ev.target.closest("[data-unmark]")) {
+      MK.marks = MK.marks.filter(m => m !== editing);
+      close(); mkDrawStage(); mkRail(); MK.dirty = true; return;
+    }
+    if (ev.target.closest("[data-back]")) { close(); mkBar(); return; }
+    if (ev.target.closest("[data-close]") || ev.target === scrim) {
+      close(); mkClearSel();
+    }
+  });
+}
+
+// The duplicate guard. `client` must not become a second `Client`.
+function mkNewForm(scrim, kind, selected, commit) {
+  const body = scrim.querySelector("#mk-body");
+  const literal = kind === "literal";
+  body.innerHTML = `<div class="mk-form">
+    <label class="fld"><span>What should we call it?</span>
+      <input type="text" id="mk-nf" placeholder="LeadPartner" autocomplete="off"></label>
+    <div id="mk-clash"></div>
+    <label class="fld"><span>${literal ? "The value to use everywhere"
+      : "An example, so colleagues know what to type"}</span>
+      <input type="text" id="mk-nv" autocomplete="off"></label>
+    <button class="btn primary" id="mk-add">Add and use it</button></div>`;
+  const name = body.querySelector("#mk-nf"), val = body.querySelector("#mk-nv");
+  const clash = body.querySelector("#mk-clash"), add = body.querySelector("#mk-add");
+  val.value = literal ? selected.trim() : "";
+  val.placeholder = selected.trim().slice(0, 40);
+  name.focus();
+  let anyway = false;
+
+  const near = () => {
+    const n = mkNorm(name.value);
+    if (!n) return null;
+    return mkNames().find(x => {
+      const k = mkNorm(x.name), l = mkNorm(label(x.name));
+      return k === n || l === n || k.startsWith(n) || n.startsWith(k);
+    }) || null;
+  };
+  const check = () => {
+    const hit = anyway ? null : near();
+    if (!hit) { clash.innerHTML = ""; add.disabled = false;
+      add.textContent = "Add and use it"; return; }
+    const same = mkNorm(hit.name) === mkNorm(name.value);
+    clash.innerHTML = `<div class="mk-clash">${same
+      ? `<b>You already have this one.</b> It is called <b>${esc(label(hit.name))}</b>.`
+      : `<b>Did you mean ${esc(label(hit.name))}?</b> Two names that mean the
+         same thing will not fill in properly.`}
+      <div class="mk-clash-acts">
+        <button class="btn primary" data-use="${esc(hit.name)}">Use
+          ${esc(label(hit.name))}</button>
+        ${same ? "" : `<button class="btn" data-anyway="1">No, mine is different</button>`}
+      </div></div>`;
+    add.disabled = same;
+    add.textContent = same ? "Already exists" : "Add and use it";
+  };
+  name.addEventListener("input", () => { anyway = false; check(); });
+
+  body.addEventListener("click", (ev) => {
+    const use = ev.target.closest("[data-use]");
+    if (use) {
+      const n = use.dataset.use;
+      return commit(n, { from: "field", field: n }, mkSample(n));
+    }
+    if (ev.target.closest("[data-anyway]")) { anyway = true; check(); return; }
+    if (!ev.target.closest("#mk-add")) return;
+    const label_ = name.value.trim();
+    if (!label_) { name.focus(); return; }
+    const id = label_.replace(/[^A-Za-z0-9_]+/g, "");
+    if (!id) { name.focus(); return; }
+    commit(id, literal ? { from: "literal", value: val.value }
+      : { from: "field", field: id }, val.value.trim());
+  });
+}
+
+// ------------------------------------------------------------------ rail
+function mkRail() {
+  const here = mkHere();
+  $("mk-here").innerHTML = here.length ? here.map(m =>
+    `<div class="mk-row"><span class="mk-dot"></span>
+      <span class="t"><b>${esc(label(m.name))}</b>
+        <span>${esc(m.text)} &middot; ${esc(m.shapeName)}</span></span>
+      <button class="x" data-drop="${m.id}" aria-label="Remove">&times;</button>
+     </div>`).join("")
+    : `<p class="mk-empty">Nothing marked on this slide. Open a text box and
+       drag across the words that change.</p>`;
+
+  const byName = {};
+  MK.marks.forEach(m => (byName[m.name] = byName[m.name] || []).push(m));
+  const names = Object.keys(byName).sort();
+  $("mk-all-count").textContent = names.length ? `(${names.length})` : "";
+  $("mk-all").innerHTML = names.length ? names.map(n =>
+    `<div class="mk-row"><span class="mk-dot"></span>
+      <span class="t"><b>${esc(label(n))}</b>
+        <span>${byName[n][0].binding.from === "literal"
+          ? "fixed value" : "from the build form"}</span></span>
+      <span class="mk-used">${byName[n].length}×</span></div>`).join("")
+    : `<p class="mk-empty">Nothing yet.</p>`;
+
+  const slides = new Set(MK.marks.map(m => m.slide));
+  $("mk-tally").textContent = MK.marks.length
+    ? `${MK.marks.length} marked across ${slides.size} slide(s)`
+    : "";
+  $("mk-save").disabled = !MK.marks.length;
+}
+
+// --------------------------------------------------------------- wiring
+document.addEventListener("pointerdown", (ev) => {
+  if (!ev.target.closest("#mk-stage")) return;
+  const fx = ev.target.closest(".mk-fx");
+  if (fx) {
+    const m = MK.marks.find(x => x.id === fx.dataset.mark);
+    if (m) { MK.sel = null; mkPick(m); }
+    return;
+  }
+  const w = ev.target.closest(".mk-w");
+  if (w) {
+    ev.preventDefault();
+    MK.dragging = true;
+    const box = w.closest(".mk-box");
+    MK.sel = { shape: +box.dataset.i, para: +w.dataset.para,
+      from: +w.dataset.w, to: +w.dataset.w, anchor: +w.dataset.w };
+    mkDrawStage(); mkBar();
+    return;
+  }
+  const box = ev.target.closest(".mk-box");
+  if (box) {
+    const i = +box.dataset.i;
+    MK.open = MK.open === i ? null : i;
+    MK.sel = null; $("mk-bar").hidden = true;
+    mkDrawStage();
+  }
+});
+
+document.addEventListener("pointerover", (ev) => {
+  if (!MK.dragging || !MK.sel) return;
+  const w = ev.target.closest(".mk-w");
+  if (!w || +w.dataset.para !== MK.sel.para) return;
+  const t = +w.dataset.w;
+  MK.sel.from = Math.min(MK.sel.anchor, t);
+  MK.sel.to = Math.max(MK.sel.anchor, t);
+  mkDrawStage(); mkBar();
+});
+
+document.addEventListener("pointerup", () => {
+  if (MK.dragging) { MK.dragging = false; mkBar(); }
+});
+
+document.addEventListener("click", (ev) => {
+  const drop = ev.target.closest("#mk-here [data-drop]");
+  if (drop) {
+    MK.marks = MK.marks.filter(m => m.id !== drop.dataset.drop);
+    mkDrawStage(); mkRail(); MK.dirty = true;
+  }
+});
+
+// --------------------------------------------------------------- toolbar
+$("mk-prev").onclick = () => { if (MK.index > 1) { MK.index--; renderMark(); } };
+$("mk-next").onclick = () => {
+  const n = (S.inspect && S.inspect.blocks.length) || 1;
+  if (MK.index < n) { MK.index++; renderMark(); }
+};
+$("mk-values").onclick = function () {
+  MK.showValues = !MK.showValues;
+  this.textContent = MK.showValues ? "Showing: example values"
+                                   : "Showing: field names";
+  mkDrawStage();
+};
+$("mk-save").onclick = () => mkSave();
+
+// Saving makes a NEW library. The one being marked up is never written to, so
+// a mistake here costs nothing that cannot be undone by carrying on with the
+// old one - which is why the dialog says so rather than asking for confidence.
+function mkSave() {
+  if (!MK.marks.length) return;
+  const base = String(S.lib || "library").replace(/_v\d+$/, "");
+  const taken = new Set((S.libs || []).map(l => l.id));
+  let n = 2;
+  while (taken.has(base + "_v" + n)) n++;
+
+  const scrim = document.createElement("div");
+  scrim.className = "mk-scrim";
+  scrim.innerHTML = `<div class="mk-sheet" role="dialog" aria-modal="true"
+      aria-label="Save as a new library">
+    <div class="mk-sheet-head"><h3>Save as a new library</h3>
+      <div class="mk-quote">${MK.marks.length} thing(s) marked across
+        ${new Set(MK.marks.map(m => m.slide)).size} slide(s). <b>${esc(S.lib)}</b>
+        is not changed &mdash; it stays exactly as it is.</div></div>
+    <div class="mk-form">
+      <label class="fld"><span>Call the new library</span>
+        <input type="text" id="mk-name" value="${esc(base + "_v" + n)}"
+          autocomplete="off"></label>
+      <label class="fld"><span>What changed (optional)</span>
+        <input type="text" id="mk-desc" autocomplete="off"
+          placeholder="marked the client name and the fees"></label>
+      <p class="mk-empty">Lower case letters, digits and underscores. Your
+        rules, bindings and answer sets come with it.</p>
+    </div>
+    <div class="mk-sheet-foot"><span style="flex:1"></span>
+      <button class="btn" data-close="1">Cancel</button>
+      <button class="btn primary" id="mk-go-save">Save</button></div></div>`;
+  document.body.appendChild(scrim);
+  const name = scrim.querySelector("#mk-name");
+  name.focus(); name.select();
+
+  scrim.addEventListener("click", async (ev) => {
+    if (ev.target.closest("[data-close]") || ev.target === scrim) {
+      scrim.remove(); return;
+    }
+    if (!ev.target.closest("#mk-go-save")) return;
+    const go = scrim.querySelector("#mk-go-save");
+    go.disabled = true; go.textContent = "Saving\u2026";
+    try {
+      const out = await sendJSON(`/api/libraries/${S.lib}/mark`, {
+        name: name.value.trim(),
+        description: scrim.querySelector("#mk-desc").value.trim(),
+        marks: MK.marks.map(m => ({
+          part: m.part, at: m.at, expect: m.expect,
+          start: m.from, end: m.to, name: m.name, binding: m.binding,
+        })),
+      }, "POST");
+      scrim.remove();
+      MK.marks = []; MK.dirty = false;
+      mkDrawStage(); mkRail();
+      await loadLibraries();
+      flash(`Saved as ${out.library}. ${out.pdf || ""}`, "ok");
+    } catch (err) {
+      go.disabled = false; go.textContent = "Save";
+      const box = scrim.querySelector(".mk-form");
+      box.insertAdjacentHTML("beforeend",
+        `<div class="mk-clash"><b>Not saved.</b> ${esc(err.message)}</div>`);
+    }
+  });
+}
+
+// Marks are not part of rules.json, so the guard on that file does not cover
+// them: leaving with unsaved marks would lose the session's work silently.
+window.addEventListener("beforeunload", (e) => {
+  if (MK.dirty && MK.marks.length) { e.preventDefault(); e.returnValue = ""; }
+});
+$("mk-go").onclick = () => { if (MK.sel) mkPick(null); };
+$("mk-x").onclick = mkClearSel;
 
 // ------------------------------------------------------------------- boot
 (async function boot() {

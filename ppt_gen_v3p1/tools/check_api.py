@@ -37,7 +37,37 @@ def check(label, ok, detail=""):
     print("  %-4s %-36s %s" % ("ok" if ok else "FAIL", label, detail))
 
 
+def _no_network(*_args, **_kwargs):
+    """Anyone running these on a machine with a working `.env` would otherwise
+    be one import away from a check suite uploading a deck to somebody's real
+    SharePoint to find out whether a test passes.
+
+    This used to guard only the section that talks to Graph. Then import
+    learned to make a library PDF, and ordinary import checks started reaching
+    the tenant - so the guard belongs around the whole run, and the credentials
+    go out of the environment with it.
+    """
+    raise AssertionError("a check tried to reach the real Microsoft Graph")
+
+
 def main():
+    from engine import graph as graphmod
+
+    graph_env = {k: os.environ.pop(k, None) for k in graphmod.ENV}
+    wire = graphmod._wire
+    graphmod._wire = _no_network
+    try:
+        return _run()
+    finally:
+        graphmod._wire = wire
+        graphmod.TRANSPORT = None
+        graphmod.forget_apps()
+        for key, was in graph_env.items():
+            if was is not None:
+                os.environ[key] = was
+
+
+def _run():
     demo = os.path.join(ROOT, "templates", "demo")
     if not os.path.isdir(demo):
         print("no demo template at %s" % demo)
@@ -224,6 +254,8 @@ def main():
     with open(os.path.join(appmod.BUILDS, built["token"] + ".json")) as fh:
         note = json.load(fh)
     tpl_demo = appmod.find_template(appmod.TEMPLATES, "demo")
+    demo_pptx_before = open(os.path.join(tpl_demo.folder, "library.pptx"),
+                            "rb").read()
     picked = client.post("/api/libraries/demo/select",
                          json={"answers": exp}).json()["slides"]
     with tpl_demo.open_library() as lib:
@@ -239,6 +271,249 @@ def main():
     check("preview slide 2 really is the library page the rules chose",
           served == open(direct[0], "rb").read(),
           "library page %d, byte for byte" % (want[1] + 1))
+
+    # ------------------------------------------------- slide text, for editing
+    #
+    # The read side of marking placeholders in the tool. Two properties matter
+    # and nothing else here does:
+    #
+    #   * every box lands on the slide - a box in the wrong place means an
+    #     author marks the wrong words with complete confidence, which is the
+    #     same failure class as a preview showing the wrong page;
+    #   * a run's span cuts the paragraph text exactly - that span is the
+    #     address a write will resolve, so if it drifts the placeholder lands
+    #     in the wrong run.
+    r = client.get("/api/libraries/demo/slides/1/text")
+    tm = r.json()
+    check("GET /libraries/demo/slides/1/text",
+          r.status_code == 200 and tm.get("shapes"),
+          "%d shape(s), slide is %d x %d EMU"
+          % (len(tm.get("shapes") or []), tm.get("width", 0), tm.get("height", 0)))
+
+    astray = [s["name"] for s in tm["shapes"]
+              if s["box"][0] < 0 or s["box"][1] < 0
+              or s["box"][0] + s["box"][2] > tm["width"] + 1
+              or s["box"][1] + s["box"][3] > tm["height"] + 1]
+    check("every shape box lands on the slide", not astray,
+          "%d box(es) checked" % len(tm["shapes"]) if not astray
+          else "off the slide: " + ", ".join(astray))
+
+    def spans_hold(slide_map):
+        """Runs in order, inside the text, not overlapping, and covering
+        everything except the line breaks `<a:br>` puts there."""
+        for shape in slide_map["shapes"]:
+            for para in shape["paragraphs"]:
+                text, at = para["text"], 0
+                covered = [False] * len(text)
+                for run in para["runs"]:
+                    if not (at <= run["start"] <= run["end"] <= len(text)):
+                        return "%s p%d: run span %d-%d does not fit" % (
+                            shape["name"], para["index"], run["start"], run["end"])
+                    for i in range(run["start"], run["end"]):
+                        covered[i] = True
+                    at = run["end"]
+                loose = set(text[i] for i in range(len(text)) if not covered[i])
+                if loose - set("\n"):
+                    return "%s p%d: %r is in no run" % (
+                        shape["name"], para["index"], "".join(sorted(loose))[:12])
+        return None
+
+    broke = None
+    for n in range(1, len(client.get("/api/libraries/demo").json()["blocks"]) + 1):
+        broke = spans_hold(client.get("/api/libraries/demo/slides/%d/text" % n).json())
+        if broke:
+            break
+    check("every run's span cuts its paragraph exactly", broke is None,
+          broke or "all slides, all paragraphs")
+
+    # Placeholders already in the library must come back whole, or the editor
+    # would offer to mark text that is already a placeholder.
+    found = set()
+    for shape in tm["shapes"]:
+        for para in shape["paragraphs"]:
+            found.update(para["placeholders"])
+    check("placeholders already on the slide are reported",
+          "ClientName" in found, ", ".join(sorted(found)) or "none")
+
+    # The picture the editor draws its boxes over. It has to be the real page:
+    # the boxes come from the OOXML, so they land correctly on a true render
+    # and nowhere useful on a redrawn approximation.
+    img = client.get("/api/libraries/demo/slides/1/png")
+    check("GET /libraries/demo/slides/1/png",
+          img.status_code == 200 and img.content[1:4] == b"PNG",
+          "%d bytes, a real png" % len(img.content))
+    check("a slide image that does not exist is 404",
+          client.get("/api/libraries/demo/slides/99/png").status_code == 404)
+
+    check("a slide that does not exist is 404",
+          client.get("/api/libraries/demo/slides/99/text").status_code == 404)
+    check("slide text does not change the library",
+          open(os.path.join(tpl_demo.folder, "library.pptx"), "rb").read()
+          == demo_pptx_before,
+          "library.pptx is byte-identical after reading it")
+
+    # Coverage is the property that decides whether this feature is usable at
+    # all: an author who can mark six placeholders out of ten is an author who
+    # still has to open PowerPoint. Measured against the library, not asserted.
+    def reachable(lib_name, slides):
+        seen, cells, gaps = set(), 0, []
+        for n in range(1, slides + 1):
+            page = client.get("/api/libraries/%s/slides/%d/text" % (lib_name, n)).json()
+            gaps += page.get("unreachable") or []
+            for shape in page["shapes"]:
+                if shape.get("kind") == "cell":
+                    cells += 1
+                for para in shape["paragraphs"]:
+                    seen.update(para["placeholders"])
+        return seen, cells, gaps
+
+    demo_blocks = client.get("/api/libraries/demo").json()
+    want = {p.strip("{}").strip() for p in demo_blocks["placeholders"]}
+    got, _cells, gaps = reachable("demo", len(demo_blocks["blocks"]))
+    check("every placeholder in the library is reachable", want <= got,
+          "%d of %d" % (len(want & got), len(want)) +
+          ("" if want <= got else " - missing " + ", ".join(sorted(want - got))))
+
+    # The fixture library is the realistic one: 15 slides, and a fee table that
+    # holds four of its ten placeholders. Before tables were readable this
+    # check would have failed at 6 of 10.
+    with open(os.path.join(ROOT, "fixtures", "master.pptx"), "rb") as fh:
+        r = client.post("/api/libraries",
+                        files={"file": ("master.pptx", fh.read())},
+                        data={"name": "fx_tables"})
+    if r.status_code == 200:
+        fx = client.get("/api/libraries/fx_tables").json()
+        fx_want = {p.strip("{}").strip() for p in fx["placeholders"]}
+        fx_got, fx_cells, fx_gaps = reachable("fx_tables", len(fx["blocks"]))
+        check("text inside a table can be marked", fx_cells > 0,
+              "%d cell(s) across %d slide(s)" % (fx_cells, len(fx["blocks"])))
+        check("a fee table does not hide its placeholders", fx_want <= fx_got,
+              "%d of %d reachable" % (len(fx_want & fx_got), len(fx_want)) +
+              ("" if fx_want <= fx_got else " - missing " +
+               ", ".join(sorted(fx_want - fx_got))))
+        check("nothing on a real library is unreachable", not fx_gaps,
+              "; ".join(g["why"] for g in fx_gaps[:2]) if fx_gaps else "no gaps")
+
+        astray, broke = [], None
+        for n in range(1, len(fx["blocks"]) + 1):
+            page = client.get("/api/libraries/fx_tables/slides/%d/text" % n).json()
+            astray += [s["name"] for s in page["shapes"]
+                       if s["box"][0] < 0 or s["box"][1] < 0
+                       or s["box"][0] + s["box"][2] > page["width"] + 1
+                       or s["box"][1] + s["box"][3] > page["height"] + 1]
+            broke = broke or spans_hold(page)
+        check("every box on a real library lands on the slide", not astray,
+              "%d slide(s) checked" % len(fx["blocks"]) if not astray
+              else "off the slide: " + ", ".join(sorted(set(astray))[:3]))
+        check("run spans hold across a real library", broke is None,
+              broke or "15 slides, tables included")
+    else:
+        check("text inside a table can be marked", False,
+              "could not import the fixture library: %d" % r.status_code)
+    shutil.rmtree(os.path.join(appmod.TEMPLATES, "fx_tables"), ignore_errors=True)
+    shutil.rmtree(os.path.join(ROOT, "data", "payloads", "fx_tables"),
+                  ignore_errors=True)
+
+    # ------------------------------------------- marking, and saving it away
+    #
+    # The promise this feature makes is not that it writes a placeholder
+    # correctly - it is that the library an author started from is still there
+    # if it does not. So the byte-for-byte check on the original matters more
+    # than the rest, and it is made after a save that worked *and* after every
+    # save that was refused.
+    #
+    # Graph is taken out of the picture for these: a check suite that reaches a
+    # live tenant to make a preview PDF is one nobody can run on a train.
+    mk_env = {k: os.environ.pop(k, None) for k in
+              ("GRAPH_TENANT_ID", "GRAPH_CLIENT_ID", "GRAPH_CLIENT_SECRET",
+               "GRAPH_DRIVE_ID")}
+    mk_made = []
+    try:
+        mk_page = client.get("/api/libraries/demo/slides/1/text").json()
+        mk_para = [q for sh in mk_page["shapes"] for q in sh["paragraphs"]
+                   if q["text"].startswith("Proposal for")][0]
+        mk_at = mk_para["text"].index("external audit")
+        mk_one = {"part": mk_page["part"], "at": mk_para["at"],
+                  "expect": mk_para["text"], "start": mk_at,
+                  "end": mk_at + len("external audit"), "name": "ServiceLine",
+                  "binding": {"from": "literal", "value": "external audit"}}
+
+        r = client.post("/api/libraries/demo/mark",
+                        json={"name": "demo_marked", "description": "a check",
+                              "marks": [mk_one]})
+        mk_out = r.json()
+        if r.status_code == 200:
+            mk_made.append("demo_marked")
+        check("POST /libraries/demo/mark saves a new library",
+              r.status_code == 200 and mk_out.get("library") == "demo_marked",
+              str(mk_out.get("detail") or mk_out.get("library"))[:60])
+        check("the library it was marked from is untouched",
+              open(os.path.join(tpl_demo.folder, "library.pptx"), "rb").read()
+              == demo_pptx_before, "byte for byte")
+
+        mk_new = client.get("/api/libraries/demo_marked").json()
+        check("the placeholder is in the new library",
+              "ServiceLine" in (mk_new.get("placeholders") or []),
+              ", ".join(sorted(mk_new.get("placeholders") or []))[:54])
+        check("and every slide came with it",
+              len(mk_new.get("blocks") or []) == len(demo_blocks["blocks"]),
+              "%d slide(s)" % len(mk_new.get("blocks") or []))
+
+        mk_saved = client.get("/api/libraries/demo_marked/rules").json()
+        mk_from = client.get("/api/libraries/demo/rules").json()
+        check("the rules travelled with it",
+              [row["id"] for row in mk_saved["deck"]]
+              == [row["id"] for row in mk_from["deck"]],
+              "%d row(s), in the same order" % len(mk_saved["deck"]))
+        check("the binding was written with the placeholder",
+              (mk_saved["placeholders"].get("{{ServiceLine}}") or {}).get("from")
+              == "literal",
+              str(mk_saved["placeholders"].get("{{ServiceLine}}"))[:48])
+
+        # A library that cannot build a deck was written badly, whatever its
+        # placeholders say.
+        mk_deck = client.post("/api/libraries/demo_marked/build",
+                              json={"answers": exp})
+        check("a deck still builds from the new library",
+              mk_deck.status_code == 200 and mk_deck.json()["slides"] > 0,
+              "%s slide(s)" % (mk_deck.json().get("slides")
+                               if mk_deck.status_code == 200
+                               else mk_deck.text[:36]))
+
+        # ---- the refusals, each of which must leave nothing behind
+        r = client.post("/api/libraries/demo/mark",
+                        json={"name": "demo_stale",
+                              "marks": [dict(mk_one,
+                                             expect="never said this")]})
+        check("text that changed since it was read is refused",
+              r.status_code == 409, (r.json().get("detail") or "")[:54])
+        check("and a refused save leaves no library behind",
+              not os.path.isdir(os.path.join(appmod.TEMPLATES, "demo_stale")))
+
+        r = client.post("/api/libraries/demo/mark",
+                        json={"name": "demo_marked", "marks": [mk_one]})
+        check("a name already in use is refused", r.status_code == 400,
+              (r.json().get("detail") or "")[:50])
+        check("marking nothing is refused",
+              client.post("/api/libraries/demo/mark",
+                          json={"name": "demo_empty", "marks": []}
+                          ).status_code == 400)
+        check("a name that is not a library id is refused",
+              client.post("/api/libraries/demo/mark",
+                          json={"name": "Demo Marked", "marks": [mk_one]}
+                          ).status_code == 400)
+        check("the original is still untouched after every refusal",
+              open(os.path.join(tpl_demo.folder, "library.pptx"), "rb").read()
+              == demo_pptx_before, "byte for byte")
+    finally:
+        for gone in mk_made:
+            shutil.rmtree(os.path.join(appmod.TEMPLATES, gone),
+                          ignore_errors=True)
+            shutil.rmtree(os.path.join(ROOT, "data", "payloads", gone),
+                          ignore_errors=True)
+        for key, was in mk_env.items():
+            if was is not None:
+                os.environ[key] = was
 
     rs = client.get("/api/renderers").json()
     check("GET /renderers says what this machine can do",
@@ -296,17 +571,7 @@ def main():
                            json={"answers": exp}).json()["token"]
 
     graph_was = {k: os.environ.get(k) for k in graphmod.ENV}
-    real_wire = graphmod._wire
-
-    def _no_network(*_a, **_kw):
-        """Anyone running these on a machine that has a real .env would
-        otherwise be one mistake away from a check suite talking to a live
-        tenant - uploading a deck to somebody's SharePoint to see if a test
-        passes. Make it impossible rather than unlikely."""
-        raise AssertionError("a check tried to reach the real Graph")
-
     try:
-        graphmod._wire = _no_network
         for name in graphmod.ENV:
             os.environ.pop(name, None)
         ok, why = rendermod.probe("graph")
@@ -403,6 +668,51 @@ def main():
               r.status_code == 200 and r.json()["engine"] != "graph",
               "auto used %s" % r.json().get("engine"))
 
+        # ---- the point of the whole exercise: a .pptx on its own
+        #
+        # An author uploads one file. Making the library PDF used to mean
+        # PowerPoint on somebody's desk, which is why import refused to
+        # generate one; Graph needs nothing installed, so that reasoning does
+        # not reach it.
+        graphmod.forget_apps()
+        fake = FakeGraph(pdf=graph_pdf(len(demo_blocks["blocks"])))
+        graphmod.TRANSPORT = fake
+        with open(tpl_demo.library_path, "rb") as fh:
+            r = client.post("/api/libraries",
+                            files={"file": ("library.pptx", fh.read())},
+                            data={"name": "pptx_only"})
+        preview = ((r.json().get("imported") or {}).get("preview") or {})
+        check("a .pptx on its own gets its PDF made for it",
+              r.status_code == 200 and preview.get("pdf"),
+              "%s page(s)" % preview.get("pages") if preview.get("pdf")
+              else str(preview.get("why"))[:56])
+        check("and the deck it uploaded is still deleted afterwards",
+              fake.deleted and not fake.bin, "folder and bin both empty")
+        shutil.rmtree(os.path.join(appmod.TEMPLATES, "pptx_only"),
+                      ignore_errors=True)
+
+        # Office Online and PowerPoint need not agree about hidden slides, and
+        # a PDF with the wrong number of pages is worse than none: every
+        # preview after the first missing slide would show a different one.
+        graphmod.forget_apps()
+        graphmod.TRANSPORT = FakeGraph(pdf=graph_pdf(1))
+        with open(tpl_demo.library_path, "rb") as fh:
+            r = client.post("/api/libraries",
+                            files={"file": ("library.pptx", fh.read())},
+                            data={"name": "pptx_short"})
+        preview = ((r.json().get("imported") or {}).get("preview") or {})
+        check("a generated PDF with the wrong page count is not kept",
+              r.status_code == 200 and not preview.get("pdf")
+              and "one for one" in (preview.get("why") or ""),
+              (preview.get("why") or "")[:54])
+        check("and the library still imported without it",
+              os.path.isdir(os.path.join(appmod.TEMPLATES, "pptx_short"))
+              and not os.path.exists(os.path.join(
+                  appmod.TEMPLATES, "pptx_short", "library.pdf")),
+              "imported, no PDF, previews fall back")
+        shutil.rmtree(os.path.join(appmod.TEMPLATES, "pptx_short"),
+                      ignore_errors=True)
+
         # ---- the parts an API call cannot reach on its own
         graphmod.forget_apps()
         fake = FakeGraph(pdf=deck_pdf)
@@ -454,7 +764,6 @@ def main():
               first >= 2 and second == 0,
               "%d call(s) cold, %d warm" % (first, second))
     finally:
-        graphmod._wire = real_wire
         graphmod.TRANSPORT = None
         graphmod.forget_apps()
         for key, value in graph_was.items():
@@ -541,7 +850,7 @@ def main():
     prev = (r.json().get("imported", {}).get("preview") or {})
     check("a library without a PDF still imports, and says what is missing",
           r.status_code == 200 and not prev.get("pdf")
-          and "make_library_pdf" in (prev.get("why") or ""),
+          and "could not be made here" in (prev.get("why") or ""),
           (prev.get("why") or "")[:58])
     nb = client.post("/api/libraries/demo_nopdf/build", json={"answers": exp})
     if nb.status_code == 200:

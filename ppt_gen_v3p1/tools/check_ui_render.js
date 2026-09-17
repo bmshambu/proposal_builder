@@ -128,6 +128,31 @@ const CANNED = [
     placeholders: ["ClientName", "FeeTotal"], unbound: ["FeeTotal"], unused: [],
     by_source: { marker: 2, title: 1 }, drift: [], problems: [], has_rules: true,
   }],
+  // The Mark text screen. Two shapes, one of them a table cell, so the check
+  // covers both kinds of box the editor has to place.
+  [/\/slides\/\d+\/text$/, {
+    part: "ppt/slides/slide1.xml", index: 1, block: "cover", title: "Cover",
+    width: 12192000, height: 6858000,
+    shapes: [
+      {
+        kind: "shape", id: "4", name: "title", rot: 0,
+        box: [914400, 1920240, 10363200, 1600200],
+        paragraphs: [{
+          index: 0, text: "Globex International Holdings",
+          runs: [{ start: 0, end: 29, editable: true }], placeholders: [],
+        }],
+      },
+      {
+        kind: "cell", id: "7", row: 1, col: 1, name: "fees r2c2", rot: 0,
+        box: [914400, 4000000, 4000000, 400000],
+        paragraphs: [{
+          index: 0, text: "$248,000",
+          runs: [{ start: 0, end: 8, editable: true }], placeholders: [],
+        }],
+      },
+    ],
+    unreachable: [],
+  }],
 ];
 const calls = [];
 global.fetch = async (url) => {
@@ -146,7 +171,7 @@ global.fetch = async (url) => {
 try {
   // app.js is strict mode, so its scope does not leak into ours. Ask for the
   // one function this file needs to test directly.
-  eval(js + "\n;globalThis.__readValue = readValue; globalThis.__formatted = formatted; globalThis.__md = md; globalThis.__viewer = { load: loadBuiltSlides, big, small }; globalThis.__moveRow = moveRow;");
+  eval(js + "\n;globalThis.__readValue = readValue; globalThis.__formatted = formatted; globalThis.__md = md; globalThis.__viewer = { load: loadBuiltSlides, big, small }; globalThis.__moveRow = moveRow; globalThis.__showTab = showTab; globalThis.__renderMark = renderMark; globalThis.__mkShapeHTML = mkShapeHTML; globalThis.__MK = MK; globalThis.__renderQuestionForm = renderQuestionForm; globalThis.__qfAdd = qfAdd; globalThis.__QFOFF = QFOFF; globalThis.__QFADD = QFADD;");
 } catch (err) {
   problems.push("the page threw while initialising: " + err.message);
 }
@@ -318,6 +343,126 @@ try {
     if (got !== want) problems.push(`markdown ${why}: got ${got}, want ${want}`);
   }
   console.log("markdown: " + MD.length + " case(s) checked");
+
+  // ---------------------------------------------------------- mark text
+  //
+  // The overlay is the whole feature: a box in the wrong place means an author
+  // marks the wrong words and never finds out. This stub has no layout, so the
+  // check reads what the screen wrote - that boxes are drawn, that each is
+  // placed as a share of the slide rather than in pixels (the picture and the
+  // overlay have to scale together), and that the picture is the real page.
+  try {
+    __showTab("mark");
+    await __renderMark();
+    const stage = (boxes["mk-stage"] || {}).innerHTML || "";
+    const drawn = (stage.match(/class="mk-box/g) || []).length;
+    if (drawn !== 2) {
+      problems.push("the mark screen drew " + drawn + " box(es), expected 2");
+    }
+    // 914400 of 12192000 EMU is 7.5% from the left, which is exactly where the
+    // shape sits on the slide. A pixel value here would be a bug.
+    if (!/left:7\.5000%/.test(stage)) {
+      problems.push("a mark box is not placed as a share of the slide");
+    }
+    if (!/\/slides\/1\/png/.test(stage)) {
+      problems.push("the mark screen is not showing the real rendered page");
+    }
+    const words = (__mkShapeHTML(__MK.map.shapes[0], 0)
+      .match(/class="mk-w/g) || []).length;
+    if (words !== 3) {
+      problems.push("opening a shape gave " + words
+        + " clickable word(s), expected 3");
+    }
+    const rail = (boxes["mk-here"] || {}).innerHTML || "";
+    if (!rail.trim()) problems.push("the mark screen rail is empty");
+    console.log("mark text: " + drawn + " exact box(es), " + words
+      + " words selectable in the opened shape");
+  } catch (err) {
+    problems.push("the mark screen threw: " + err.message);
+  }
+
+  // ------------------------------------------------- the questions form
+  //
+  // The chicken and egg this form exists to break: the field catalogue is
+  // built from answer sets, so a library that has just been marked up has an
+  // empty one - and the author is asked to hand-write the first JSON file
+  // precisely when they know least. The placeholders already say which fields
+  // will be asked for, so the form can be built from those instead.
+  //
+  // The canned library has `{{FeeTotal}}` with no binding and no answer set
+  // has ever mentioned it. It has to appear as a question anyway.
+  try {
+    __showTab("questions");
+    __renderQuestionForm();
+    const form = (boxes["qf-form"] || {}).innerHTML || "";
+    const asked = (form.match(/class="q[ "]/g) || []).length;
+    if (asked < 5) {
+      problems.push("the questions form drew " + asked
+        + " question(s), expected 5 (4 from answer sets, 1 from a placeholder)");
+    }
+    if (!/FeeTotal/.test(form)) {
+      problems.push("the questions form does not ask for a field that only a "
+        + "placeholder mentions");
+    }
+    // The build form and this one must render a field the same way: the same
+    // date field has to be a date control on both.
+    if (!/data-newans="DueDate"[^>]*type="date"|type="date"[^>]*data-newans="DueDate"/
+      .test(form)) {
+      problems.push("a date field is not a date control on the questions form");
+    }
+    const note = (boxes["qf-note"] || {}).innerHTML || "";
+    if (!/never\s+been\s+answered/.test(note)) {
+      problems.push("the questions form does not say which fields are new");
+    }
+    // The derived list is a starting point. An author who does not want to be
+    // asked something takes it off; one who needs a question nobody derived
+    // puts it on. Neither should be able to produce two questions for one
+    // thing - `Client` beside `client` is two fields and neither fills.
+    if (!/data-qdrop="FeeTotal"/.test(form)) {
+      problems.push("a question on the form cannot be removed");
+    }
+
+    __QFOFF.add("FeeTotal");
+    __renderQuestionForm();
+    const fewer = ((boxes["qf-form"] || {}).innerHTML || "")
+      .match(/class="q[ "]/g) || [];
+    if (fewer.length !== asked - 1) {
+      problems.push("removing a question left " + fewer.length
+        + " on the form, expected " + (asked - 1));
+    }
+    // FeeTotal is a placeholder with no binding, so the deck needs it. Saying
+    // nothing here would let an author quietly remove the question that fills
+    // a slide.
+    const warned = (boxes["qf-note"] || {}).innerHTML || "";
+    if (!/used\s+on a slide/.test(warned)) {
+      problems.push("removing a question the deck needs is not flagged");
+    }
+
+    const box = document.getElementById("qf-new");
+    box.value = "Engagement partner";
+    __qfAdd();
+    const added = (boxes["qf-form"] || {}).innerHTML || "";
+    if (!/Engagement_partner/.test(added)) {
+      problems.push("a question added by hand did not appear on the form");
+    }
+
+    box.value = "engagement  PARTNER";
+    __qfAdd();
+    const twice = ((boxes["qf-form"] || {}).innerHTML || "")
+      .match(/data-newans="Engagement_partner"/g) || [];
+    if (twice.length !== 1) {
+      problems.push("the same question was added twice under a different case");
+    }
+
+    __QFOFF.clear();
+    __QFADD.clear();
+    __renderQuestionForm();
+    console.log("questions form: " + asked
+      + " question(s), including one no answer set has ever carried; "
+      + "removable and extendable");
+  } catch (err) {
+    problems.push("the questions form threw: " + err.message);
+  }
 
   console.log("\n" + calls.length + " API call(s): "
     + [...new Set(calls.map(u => u.split("?")[0]))].join(", "));

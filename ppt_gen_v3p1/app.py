@@ -46,6 +46,7 @@ from engine import (Rules, Template, build_template,               # noqa: E402
                     find_template, import_deck, list_templates)
 from engine import bindings                                        # noqa: E402
 from engine.rules import flatten                                   # noqa: E402
+from engine import marking as markmod                              # noqa: E402
 from engine import payloads as payloadsmod                         # noqa: E402
 from engine import graph as graphmod                               # noqa: E402
 from engine import render as rendermod                             # noqa: E402
@@ -402,29 +403,75 @@ def library_pdf_path(tpl: Template) -> str:
     return os.path.join(tpl.folder, "library.pdf")
 
 
+def graph_pdf(tpl: Template):
+    """Convert a library to PDF with Office Online, through Graph.
+
+    -> (a staged path, None) or (None, why not)
+
+    This used to be refused on principle. `attach_pdf` generated nothing,
+    because converting meant PowerPoint or LibreOffice installed somewhere, and
+    the entire point of the library PDF is that the deployment needs neither -
+    wiring a converter into import would have put the dependency straight back.
+
+    Graph is not that kind of converter. It needs nothing installed anywhere;
+    it is a network call to a service the firm already has. So the reasoning
+    that ruled out generating here does not reach it, and an author can upload
+    a .pptx on its own - which is what they wanted in the first place.
+
+    What it does change is *whose* renderer draws the preview: Office Online
+    rather than the PowerPoint on somebody's desk. An uploaded PDF therefore
+    still wins, and this is only the fallback.
+    """
+    ok, why = rendermod.probe("graph")
+    if not ok:
+        return None, why
+    try:
+        data = graphmod.from_env(timeout=rendermod.TIMEOUT).to_pdf(
+            tpl.library_path)
+    except Exception as exc:
+        return None, "%s" % exc
+    staged = library_pdf_path(tpl) + ".staged"
+    with open(staged, "wb") as fh:
+        fh.write(data)
+    return staged, None
+
+
 def attach_pdf(tpl: Template, source: Optional[str]) -> dict:
     """Give a library the PDF its previews are cut from. -> a status dict.
 
-    The PDF is made outside this app, by `tools/make_library_pdf.py`, and
-    uploaded alongside the .pptx. Deliberately not generated here: converting
-    needs PowerPoint, and the whole point of the library PDF is that the
-    deployed app never needs a converter. Wiring one into import would put the
-    dependency straight back.
+    An uploaded PDF is used as given. Without one, Graph is asked to make it -
+    see `graph_pdf` - so uploading a .pptx on its own is enough. Either way the
+    page-per-slide pairing is checked before it is kept.
 
-    A library without a PDF still imports. Previews fall back and the screen
-    says why, rather than an import failing over a preview.
+    A library still imports when neither works. Previews fall back and the
+    screen says why, rather than an import failing over a preview.
     """
+    made_here = False
     if source is None:
-        return {"pdf": False,
-                "why": "no PDF was uploaded — previews will fall back. Make one "
-                       "with tools/make_library_pdf.py and import again."}
+        source, why = graph_pdf(tpl)
+        made_here = source is not None
+        if source is None:
+            return {"pdf": False,
+                    "why": "no PDF was uploaded and one could not be made "
+                           "here: %s. Previews will fall back until a PDF is "
+                           "imported or the graph renderer is configured."
+                           % why}
     target = library_pdf_path(tpl)
     shutil.copyfile(source, target)
+    if made_here:
+        try:
+            os.remove(source)
+        except OSError:
+            pass
     with tpl.open_library() as lib:
         slides = len(lib.ordered())
 
     ok, why = rendermod.check_pdf(target, slides)
     if not ok:
+        # Office Online and PowerPoint do not have to agree about hidden
+        # slides, and a page-per-slide mismatch is worse than no PDF at all:
+        # page N would be a different slide and every preview after it would be
+        # confidently wrong.
         # A mismatched PDF is worse than none: page N would be a different slide
         # and the preview would be confidently wrong. Refuse and say so.
         try:
@@ -499,6 +546,152 @@ def get_thumbs(tpl: Template = Depends(library),
              "width": r.get("width"), "height": r.get("height"),
              "placeholders": r.get("placeholders") or [],
              "error": r.get("error")} for r in results]
+
+
+class Mark(BaseModel):
+    part: str
+    at: int
+    expect: Optional[str] = None
+    start: int
+    end: int
+    name: str
+    binding: Optional[Dict[str, Any]] = None
+
+
+class SaveMarks(BaseModel):
+    name: str = Field(..., description="the new library's id")
+    description: str = ""
+    marks: List[Mark]
+
+
+@app.post("/api/libraries/{lib}/mark", tags=["libraries"])
+def save_marks(body: SaveMarks, tpl: Template = Depends(library)):
+    """Write an author's markings into a **new** library.
+
+    The library they marked up is not touched. If any of this turns out to be
+    wrong - a placeholder in the wrong place, a name nobody recognises - the
+    answer is to go on using the old library, which is still exactly as it was.
+    That is worth more than any amount of careful in-place rewriting.
+
+    Three things travel with the marks. The **rules**, because marking only
+    changes text and every block id still resolves, and re-authoring conditions
+    is the last thing to ask of an author. The **bindings**, written in the
+    same operation as the placeholders themselves - a token with no binding is
+    a gap somebody has to find later. And the **answer sets**, without which
+    the new library's field list would open empty and the next round of
+    marking would have nothing to offer.
+
+    The library PDF does not travel: the slides say something different now, so
+    the old one would preview the old words. A new one is made here when the
+    graph renderer is configured, and its absence is reported rather than left
+    to be discovered at preview time.
+    """
+    if not NAME_RE.fullmatch(body.name or ""):
+        raise HTTPException(400, "name must be lower case letters, digits and "
+                                 "underscores")
+    if os.path.isdir(os.path.join(TEMPLATES, body.name)):
+        raise HTTPException(400, "there is already a library called %r. Pick "
+                                 "another name - nothing is overwritten here."
+                                 % body.name)
+    if not body.marks:
+        raise HTTPException(400, "there is nothing marked to save")
+
+    marks, bindings = [], {}
+    for mark in body.marks:
+        marks.append({"part": mark.part, "at": mark.at, "expect": mark.expect,
+                      "start": mark.start, "end": mark.end, "name": mark.name})
+        if mark.binding:
+            bindings.setdefault(mark.name, mark.binding)
+
+    try:
+        out = markmod.save_as(tpl, TEMPLATES, body.name, marks,
+                              bindings=bindings, description=body.description)
+    except markmod.MarkError as exc:
+        raise HTTPException(409, str(exc))
+    except Exception as exc:
+        raise HTTPException(400, "%s: %s" % (type(exc).__name__, exc))
+
+    # The field catalogue is what the next round of marking picks names from.
+    # A new library that starts with an empty one sends the author straight
+    # back to typing names by hand.
+    carried = 0
+    src_payloads = payload_dir(os.path.basename(tpl.folder))
+    if os.path.isdir(src_payloads):
+        dst = payload_dir(body.name)
+        os.makedirs(dst, exist_ok=True)
+        for entry in os.listdir(src_payloads):
+            if entry.endswith(".json"):
+                shutil.copy2(os.path.join(src_payloads, entry),
+                             os.path.join(dst, entry))
+                carried += 1
+
+    # The slides say something different now, so the old PDF would preview the
+    # old words. Same path as an import with no PDF uploaded.
+    made = attach_pdf(find_template(TEMPLATES, body.name), None)
+    out["payloads"] = carried
+    out["pdf"] = ("a new preview PDF was made" if made.get("pdf")
+                  else made.get("why"))
+    return out
+
+
+@app.get("/api/libraries/{lib}/slides/{index}/png", tags=["libraries"])
+def library_slide_png(index: int, tpl: Template = Depends(library)):
+    """One library slide as an image, out of the library PDF.
+
+    The editor draws its boxes over this. It has to be the real page rather
+    than `engine/svg.py`'s approximation, because the author is deciding what
+    the client will see - and the boxes come from the OOXML, so they land in
+    the right place on a true render and nowhere useful on a redrawn one.
+
+    Every page is rasterised on the first call and cached, so paging through a
+    library costs one conversion rather than one per slide.
+    """
+    pdf = os.path.join(tpl.folder, "library.pdf")
+    if not os.path.exists(pdf):
+        raise HTTPException(503, "this library has no PDF, so there is no true "
+                                 "picture of its slides to mark up. Import one "
+                                 "with the library, or make it with "
+                                 "tools/make_library_pdf.py.")
+    with tpl.open_library() as lib:
+        count = len(lib.ordered())
+    if not 1 <= index <= count:
+        raise HTTPException(404, "this library has %d slide(s), so there is no "
+                                 "slide %d" % (count, index))
+    out_dir = os.path.join(RENDERS, "lib-" + os.path.basename(tpl.folder))
+    try:
+        _engine, pages = rendermod.preview_from_library(
+            pdf, list(range(count)), out_dir)
+    except rendermod.RenderError as exc:
+        raise HTTPException(503, str(exc))
+    return FileResponse(pages[index - 1], media_type="image/png")
+
+
+@app.get("/api/libraries/{lib}/slides/{index}/text", tags=["libraries"])
+def slide_text(index: int, tpl: Template = Depends(library)):
+    """One slide's text shapes: exact geometry, and an address for every run.
+
+    What an editor needs and the SVG cannot give it. A shape's box comes out of
+    the OOXML and is exact, so a box drawn over a rendered page lands where the
+    shape really is. Where a *word* sits inside it does not - `engine/svg.py`
+    lays text out approximately - so the text comes back as text, with each
+    run's span, and the browser re-flows it only inside a shape somebody opened.
+
+    `unreachable` names text this cannot offer yet, a table or an unplaceable
+    group, so a gap is visible rather than text quietly not being there.
+
+    Read only. Nothing on this route changes a library.
+    """
+    with tpl.open_library() as lib:
+        blocks = lib.ordered()
+        if not 1 <= index <= len(blocks):
+            raise HTTPException(404, "this library has %d slide(s), so there is "
+                                     "no slide %d" % (len(blocks), index))
+        block = blocks[index - 1]
+        out = svgmod.text_map(lib, block.part)
+    out["index"] = index
+    out["block"] = block.id
+    out["title"] = block.title
+    return out
 
 
 @app.get("/api/libraries/{lib}/rules", tags=["rules"])
