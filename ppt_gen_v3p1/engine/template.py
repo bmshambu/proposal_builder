@@ -244,11 +244,16 @@ def find_template(root, name_or_path):
 
 # ---------------------------------------------------------------- import
 def import_deck(src_pptx, root, name=None, description="", overwrite=False,
-                keep_source_name=False):
+                keep_source_name=False, block_map=None):
     """Turn any `.pptx` into a template folder. Returns a report dict.
 
     Nothing about the deck is modified — it is copied verbatim. Identity comes
     from the sidecar this writes, so an existing firm template works untouched.
+
+    `block_map` is an existing sidecar to carry in, for the one case where the
+    deck being imported is a known edit of a deck already named: saving an
+    author's marks. Without it the ids are guessed again from the titles, and a
+    mark that touches a heading renames the block it was made on.
     """
     src_pptx = str(src_pptx)
     if not os.path.exists(src_pptx):
@@ -272,7 +277,8 @@ def import_deck(src_pptx, root, name=None, description="", overwrite=False,
     shutil.copy(src_pptx, os.path.join(folder, library_name))
 
     try:
-        with Library(os.path.join(folder, library_name)) as lib:
+        with Library(os.path.join(folder, library_name),
+                     block_map=block_map) as lib:
             mapping = lib.suggest_block_map()
             summary = lib.summary()
             found_placeholders = sorted(lib.all_placeholders())

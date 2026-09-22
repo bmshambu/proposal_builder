@@ -88,11 +88,24 @@ fee philosophy is #90 of 128"* — with a box to type the position it should
 have. Enter moves it, Esc closes. The slide is scrolled back into view and
 highlighted where it lands.
 
-The number on each row is its position **in this list**, counting every row
-including the greyed-out ones. A greyed row is a slide these answers leave out;
-it still holds its place in the order, because a different answer set puts it
-back. How many slides the current answers actually produce is the count in the
-panel heading, and the built deck's own numbering is on the Build screen.
+Each row carries two numbers, and they answer different questions.
+
+The **position**, on the left, is the row's place **in this list**, counting
+every row including the greyed-out ones. A greyed row is a slide these answers
+leave out; it still holds its place in the order, because a different answer
+set puts it back. This is the number "Move to" means. How many slides the
+current answers actually produce is the count in the panel heading, and the
+built deck's own numbering is on the Build screen.
+
+The **slide number**, written `s47`, is where that slide sits in
+`library.pptx` — what PowerPoint's thumbnail pane shows, and what the same
+deck shows in Templafy. It never changes, whatever you do to the order, which
+is what makes it the one number you can read one-to-one against another copy
+of the deck. It is on the slides in the left-hand pool too.
+
+**Go to slide** takes one of those `s` numbers and scrolls to it. If the slide
+is not in the deck at all it says so and finds it in the pool instead, which
+is usually the thing you were about to discover the slow way.
 
 **Suggest from decks** reads decks Templafy produced and proposes the order and
 conditions, as markdown to read against the screen — nothing is applied for you.

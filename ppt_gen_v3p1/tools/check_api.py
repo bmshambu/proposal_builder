@@ -17,6 +17,7 @@ import os
 import shutil
 import sys
 import tempfile
+import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -368,6 +369,23 @@ def _run():
         return seen, cells, gaps
 
     demo_blocks = client.get("/api/libraries/demo").json()
+
+    # Every block carries its slide's number in library.pptx. The Rules screen
+    # shows it beside the row's position so an author can set the order while
+    # reading the same deck in Templafy - two numbers that must never be
+    # confused, which starts with this one coming from the engine rather than
+    # the screen counting rows. It is the presentation order, not the part
+    # name: slide3.xml is wherever PowerPoint happened to write it.
+    nums = [b.get("number") for b in demo_blocks["blocks"]]
+    check("every block says which slide it is in the library",
+          nums == list(range(1, len(demo_blocks["blocks"]) + 1)),
+          "1..%d, in deck order" % len(nums) if nums else "none sent")
+    with Template(os.path.join(appmod.TEMPLATES, "demo")).open_library() as _lib:
+        check("and that number is the slide's place in the deck, not its part name",
+              [b["number"] for b in demo_blocks["blocks"]]
+              == [x.index + 1 for x in _lib.ordered()],
+              "matches presentation order")
+
     want = {p.strip("{}").strip() for p in demo_blocks["placeholders"]}
     got, _cells, gaps = reachable("demo", len(demo_blocks["blocks"]))
     check("every placeholder in the library is reachable", want <= got,
@@ -514,6 +532,83 @@ def _run():
         for key, was in mk_env.items():
             if was is not None:
                 os.environ[key] = was
+
+    # ---------------------------------- marking a library that has no markers
+    #
+    # Everything above is done against the demo deck, and every slide in it
+    # carries a {{block:id}} marker, which pins its id through anything. A
+    # firm's own template carries none: its ids are guessed from the slide
+    # titles at import and kept in blocks.json. That is the deck this has to
+    # hold for, because marking a heading *changes the title the id was
+    # guessed from* - and a re-guessed id leaves every carried rule naming a
+    # block that is no longer there. It does not raise. The library opens, the
+    # rules load, and the slide is quietly missing from every deck built after.
+    #
+    # Reported from a 130-slide office template; the demo deck cannot show it.
+    from engine import marking as markmod                          # noqa: E402
+    from engine import placeholders as phmod                       # noqa: E402
+    from engine.library import Library                             # noqa: E402
+    from engine.template import find_template, import_deck         # noqa: E402
+
+    nm_root = tempfile.mkdtemp(prefix="pptgen-check-nomark-")
+    try:
+        # the demo deck with every marker stripped out - a firm template's shape
+        nm_pptx = os.path.join(nm_root, "plain.pptx")
+        nm_buf = io.BytesIO()
+        with zipfile.ZipFile(os.path.join(tpl_demo.folder, "library.pptx")) as zs,                 zipfile.ZipFile(nm_buf, "w", zipfile.ZIP_DEFLATED) as zd:
+            for info in zs.infolist():
+                data = zs.read(info.filename)
+                if info.filename.startswith("ppt/slides/slide"):
+                    data = phmod.BLOCK_MARKER.sub(
+                        "", data.decode("utf-8")).encode("utf-8")
+                zd.writestr(info, data)
+        with open(nm_pptx, "wb") as fh:
+            fh.write(nm_buf.getvalue())
+
+        import_deck(nm_pptx, nm_root, name="plain")
+        nm_tpl = find_template(nm_root, "plain")
+        with nm_tpl.open_library() as lib:
+            nm_before = [(b.id, b.source) for b in lib.ordered()]
+            nm_cover = lib.ordered()[0]
+            nm_xml = phmod.normalise_runs(lib.read(nm_cover.part))
+            nm_at, nm_text = next(
+                (n, phmod.paragraph_text(q.group(2))[0])
+                for n, q in enumerate(phmod.A_P.finditer(nm_xml))
+                if phmod.paragraph_text(q.group(2))[0] == nm_cover.title)
+        check("a deck with no markers is named from its titles",
+              all(src == "map" for _id, src in nm_before)
+              and nm_before[0][0] != "cover",
+              "%d block(s), first is %r" % (len(nm_before), nm_before[0][0]))
+
+        # the mark an author actually makes: a word out of the heading itself
+        nm_word = nm_text.split()[0]
+        markmod.save_as(nm_tpl, nm_root, "plain_marked",
+                        [{"part": nm_cover.part, "at": nm_at, "expect": nm_text,
+                          "start": 0, "end": len(nm_word), "name": "ClientName"}],
+                        bindings={"ClientName": {"from": "field",
+                                                 "field": "client"}})
+        nm_new = find_template(nm_root, "plain_marked")
+        with nm_new.open_library() as lib:
+            nm_after = [(b.id, b.source) for b in lib.ordered()]
+            nm_ids = set(lib.blocks)
+        check("marking a heading does not rename its block",
+              [i for i, _s in nm_after] == [i for i, _s in nm_before],
+              "%s -> %s" % (nm_before[0][0], nm_after[0][0]))
+
+        nm_rules = json.load(open(os.path.join(nm_new.folder, "rules.json"),
+                                  encoding="utf-8"))
+        nm_named = set(nm_rules.get("baseline") or [])
+        nm_named |= set(nm_rules.get("blocks") or {})
+        check("and the rules that came with it still name real blocks",
+              nm_named and not (nm_named - nm_ids),
+              ", ".join(sorted(nm_named - nm_ids))[:54] or
+              "%d block(s) named, all present" % len(nm_named))
+        check("the marked heading still reads as that slide's title",
+              "{{" not in (nm_new.raw_block_map.get("slide1.xml") or {})
+                          .get("title", ""),
+              repr((nm_new.raw_block_map.get("slide1.xml") or {}).get("title"))[:54])
+    finally:
+        shutil.rmtree(nm_root, ignore_errors=True)
 
     rs = client.get("/api/renderers").json()
     check("GET /renderers says what this machine can do",

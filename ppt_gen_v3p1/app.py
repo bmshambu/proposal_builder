@@ -136,7 +136,12 @@ def inspect(tpl: Template) -> dict:
     watching three spinners resolve separately learns nothing extra.
     """
     with tpl.open_library() as lib:
+        # `number` is the slide's place in library.pptx - what PowerPoint's
+        # thumbnail pane shows, and what an author is reading off Templafy
+        # while they set the order here. Unlike a row's position it never
+        # moves, which is the whole reason it is worth sending.
         blocks = [{"id": b.id, "title": b.title, "source": b.source,
+                   "number": b.index + 1,
                    "part": os.path.basename(b.part),
                    "placeholders": sorted(b.placeholders)}
                   for b in lib.ordered()]

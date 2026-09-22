@@ -112,6 +112,18 @@ const S = {
 };
 
 const block = (id) => (S.inspect ? S.inspect.blocks.find(b => b.id === id) : null);
+
+/** The slide's number in library.pptx - the one number on this screen that is
+ *  not a position in something. A row's position changes every time the order
+ *  does; this does not, which is what makes it the thing to read against the
+ *  same deck open in Templafy or PowerPoint. Shown as `s47`, never bare, so it
+ *  can never be mistaken for the position beside it. */
+const slideNo = (id) => { const b = block(id); return b ? b.number : null; };
+const srcHTML = (id) => {
+  const n = slideNo(id);
+  return n ? `<span class="src" title="Slide ${n} in library.pptx">s${n}</span>`
+           : `<span class="src none" title="not in this library">s?</span>`;
+};
 const titleOf = (id) => (block(id) || {}).title || id;
 const label = (field) => String(field).replace(/_/g, " ").trim();
 
@@ -305,9 +317,15 @@ async function renderLibrary() {
 
   const by = i.by_source || {};
   const titled = by.title || 0, positional = by.position || 0;
+  // A sidecar id is as stable as a marker - it is pinned to the slide, not to
+  // its heading - and a firm template has no markers in it at all. Counting
+  // only markers reported "0 stable ids" on a 130-slide deck where every one
+  // of them was named, and left the six figures not adding up to the slide
+  // count.
+  const stable = (by.marker || 0) + (by.map || 0);
   $("stats").innerHTML = `
     <div class="stat"><b>${i.blocks.length}</b><span>slides found</span></div>
-    <div class="stat ok"><b>${by.marker || 0}</b><span>stable ids</span></div>
+    <div class="stat ok"><b>${stable}</b><span>stable ids</span></div>
     <div class="stat ${titled ? "warn" : ""}"><b>${titled}</b><span>named by title</span></div>
     <div class="stat ${positional ? "warn" : ""}"><b>${positional}</b><span>by position</span></div>
     <div class="stat"><b>${i.placeholders.length}</b><span>placeholders</span></div>
@@ -463,10 +481,14 @@ function renderPool() {
   const inDeck = new Set(S.deck.map(r => r.id));
   const rest = (S.inspect ? S.inspect.blocks : [])
     .filter(b => !inDeck.has(b.id))
-    .filter(b => !q || b.id.includes(q) || b.title.toLowerCase().includes(q));
+    // "47" and "s47" both find slide 47: an author searching here has a slide
+    // number in front of them at least as often as a title.
+    .filter(b => !q || b.id.includes(q) || b.title.toLowerCase().includes(q)
+                 || String(b.number) === q.replace(/^s/, ""));
   $("pool-count").textContent = `(${rest.length})`;
   $("pool").innerHTML = rest.map(b => `
     <div class="pool-item" draggable="true" data-id="${esc(b.id)}">
+      ${srcHTML(b.id)}
       ${thumb(b.id, "xs")}
       <div class="meta"><div class="t" title="${esc(b.title)}">${esc(b.title)}</div>
         <div class="id">${esc(b.id)}</div></div>
@@ -522,14 +544,17 @@ function moveRow(deck, id, pos) {
  *  Dragging is fine for ten slides and miserable for a hundred and twenty-eight:
  *  the target scrolls out of sight long before the pointer arrives.
  *
- *  It says "in this list" and shows the count because the number in the row's
- *  left column is a different number — that one is the slide's position in the
- *  *built* deck for the current answers, and skips excluded rows.
+ *  The position it takes is the one in the row's left column - the same
+ *  number, deliberately. The other number on the row, `s47`, is the slide's
+ *  place in library.pptx and is never what this moves it to; it is repeated
+ *  here so an author working against Templafy can see they opened the bar on
+ *  the slide they meant.
  */
 function moveBarHTML(row, index) {
   return `<div class="moverow" data-moving="${esc(row.id)}">
-    <span class="m">${esc(titleOf(row.id))} is <b>#${index + 1}</b> of
-      ${S.deck.length}</span>
+    <span class="m">${esc(titleOf(row.id))}
+      <span class="src">s${slideNo(row.id) || "?"}</span>
+      is <b>#${index + 1}</b> of ${S.deck.length}</span>
     <label class="movelab">Move to
       <input type="number" id="move-to" min="1" max="${S.deck.length}"
              value="${index + 1}" data-move-input></label>
@@ -549,6 +574,7 @@ function renderDeck() {
         draggable="true" data-id="${esc(row.id)}" data-move="${esc(row.id)}">
       <span class="grip">&#8942;&#8942;</span>
       <span class="num" title="Position ${index + 1} of ${S.deck.length} — click to move it">${index + 1}</span>
+      ${srcHTML(row.id)}
       ${thumb(row.id, "sm")}
       <div class="namecell"><div class="t" title="${esc(titleOf(row.id))}">${esc(titleOf(row.id))}</div>
         <div class="id">${esc(row.id)}</div></div>
@@ -1628,8 +1654,44 @@ $("inputs-toggle").onclick = function () {
   fitMain();
 };
 
+/** "Slide 47 in Templafy - where is it here?"
+ *
+ *  Answers with the row, not with a number: a position typed back at an author
+ *  is one more thing for them to go and find. A slide that is not in the deck
+ *  is still answered, from the pool, because that is the case where the
+ *  question is worth asking - it is how you notice the order is missing one.
+ */
+function gotoSlide() {
+  const want = Number(($("goto-slide").value || "").trim());
+  const note = $("goto-note");
+  const blocks = (S.inspect && S.inspect.blocks) || [];
+  const hit = blocks.find(b => b.number === want);
+  document.querySelectorAll(".found").forEach(el => el.classList.remove("found"));
+  if (!want || !hit) {
+    note.innerHTML = blocks.length
+      ? `This library has slides 1 to ${blocks.length}.`
+      : "No library open.";
+    return;
+  }
+  const inDeck = S.deck.some(r => r.id === hit.id);
+  const sel = inDeck ? ".row" : ".pool-item";
+  const el = [...document.querySelectorAll(sel)].find(r => r.dataset.id === hit.id);
+  if (el) {
+    if (el.scrollIntoView) el.scrollIntoView({ block: "center" });
+    el.classList.add("found");
+    setTimeout(() => el.classList.remove("found"), 1600);
+  }
+  note.innerHTML = inDeck
+    ? `s${hit.number} &middot; ${esc(hit.title || hit.id)} &mdash; #${
+        S.deck.findIndex(r => r.id === hit.id) + 1} in this list`
+    : `s${hit.number} &middot; ${esc(hit.title || hit.id)} &mdash;
+       <b>not in the deck</b>, it is in the slides on the left`;
+}
+
 // ----------------------------------------------------------------- events
 $("pool-search").oninput = renderPool;
+$("goto-go").onclick = gotoSlide;
+$("goto-slide").onkeydown = (e) => { if (e.key === "Enter") gotoSlide(); };
 
 document.addEventListener("click", (e) => {
   const t = e.target.closest("[data-add],[data-del],[data-edit],[data-cancel],[data-apply],[data-restore],[data-drop],[data-move],[data-move-go],[data-move-cancel],[data-move-input]");

@@ -41,12 +41,31 @@ sys.path.insert(0, ROOT)
 
 from engine import graph                                          # noqa: E402
 
+# displayName is a label, not a lookup key - Graph matches the app on `id`.
+# But it is the label an administrator sees when they later ask who has access
+# to this site, so it has to be the real app registration's name. It used to be
+# hardcoded to the name of the app in the spike tenant, which would have
+# stamped somebody else's site with a name that exists nowhere in their
+# directory.
+# Libraries SharePoint makes for its own use. A site can have these and no
+# real document library at all - a Team site whose Documents link was never
+# added looks exactly like that. Uploading into one of them would work: Graph
+# will put a client deck in Style Library without complaint, and nobody would
+# notice until somebody asked why proposals passed through the site's
+# stylesheet folder. So they are never picked automatically.
+SYSTEM_LIBS = frozenset((
+    "form templates", "style library", "site assets", "site pages",
+    "preservation hold library", "customized reports", "images",
+))
+
 GRANT_BODY = """{
   "roles": ["write"],
   "grantedToIdentities": [{
-    "application": { "id": "%s", "displayName": "ppt_gen render spike" }
+    "application": { "id": "%s", "displayName": "%s" }
   }]
 }"""
+
+NO_NAME = "<the app registration's display name>"
 
 
 def say(*bits):
@@ -59,6 +78,7 @@ def cmd_grant(args):
     graph.load_dotenv()
     app_id = os.environ.get("GRAPH_CLIENT_ID") or "<GRAPH_CLIENT_ID>"
     site = args.site or "<host>.sharepoint.com:/sites/<site>"
+    app_name = args.app_name or os.environ.get("GRAPH_APP_NAME") or NO_NAME
 
     say("")
     say("Sites.Selected grants nothing on its own. Three requests, all in")
@@ -83,20 +103,35 @@ def cmd_grant(args):
     say("   POST https://graph.microsoft.com/v1.0/sites/<site id>/permissions")
     say("   Content-Type: application/json")
     say("")
-    for line in (GRANT_BODY % app_id).splitlines():
+    for line in (GRANT_BODY % (app_id, app_name)).splitlines():
         say("   " + line)
     say("")
     say("3. Find the drive id, and put it in .env as GRAPH_DRIVE_ID")
     say("   GET https://graph.microsoft.com/v1.0/sites/<site id>/drives")
     say("   The default document library is the one named Documents.")
     say("")
-    say("If Graph Explorer is being difficult, request 2 is one line of PnP:")
+    say("Some tenants block Graph Explorer outright. Request 2 in the Graph")
+    say("PowerShell SDK, which needs no app registration of its own:")
+    say("   Connect-MgGraph -Scopes \"Sites.FullControl.All\"")
+    say("   $params = @{ roles = @(\"write\"); grantedToIdentities = @(")
+    say("       @{ application = @{ id = \"%s\";" % app_id)
+    say("                          displayName = \"%s\" } }) }" % app_name)
+    say("   New-MgSitePermission -SiteId \"<site id>\" -BodyParameter $params")
+    say("")
+    say("Or in PnP, which takes the site URL and needs no site id at all.")
+    say("Note that since late 2024 PnP needs its own app registration in the")
+    say("tenant, so this is the harder route for anyone not already using it:")
     say("   Connect-PnPOnline -Url https://<host>/sites/<name> -Interactive")
     say("   Grant-PnPAzureADAppSitePermission -AppId %s \\" % app_id)
-    say("       -DisplayName 'ppt_gen render spike' -Permissions Write")
+    say("       -DisplayName '%s' -Permissions Write" % app_name)
     say("")
     say("Then: python tools/graph_setup.py check")
     say("")
+    if app_name == NO_NAME:
+        say("Re-run with --app-name 'Whatever IT called the app registration'")
+        say("to get that filled in too. It is only a label, but it is the one")
+        say("an administrator reads when auditing who can reach this site.")
+        say("")
     if app_id.startswith("<"):
         say("(GRAPH_CLIENT_ID is not set, so the app id above is a placeholder.")
         say(" Fill in .env first and run this again to get it filled in.)")
@@ -147,16 +182,43 @@ def cmd_discover(args):
         return 1
     say("")
     for name, drive_id in libraries:
-        say("  %-24s %s" % (name, drive_id))
+        mark = "  (SharePoint's own)" if (name or "").lower() in SYSTEM_LIBS             else ""
+        say("  %-24s %s%s" % (name, drive_id, mark))
     say("")
-    pick = ([d for n, d in libraries if (n or "").lower() == "documents"]
-            or [d for _n, d in libraries])
-    if pick:
-        say("Put this in .env:")
+
+    usable = [(n, d) for n, d in libraries
+              if (n or "").lower() not in SYSTEM_LIBS]
+    if not usable:
+        say("This site has no document library of its own - everything above")
+        say("is one SharePoint made for itself. Create one before going any")
+        say("further: Site contents -> + New -> Document library. A site")
+        say("owner can normally do that without help from an administrator.")
         say("")
-        say("GRAPH_DRIVE_ID=%s" % pick[0])
+        say("Point GRAPH_DRIVE_ID at the new one, empty and used for nothing")
+        say("else, so that anything `sweep` finds in it is ours by")
+        say("definition.")
+        return 1
+
+    named = [d for n, d in usable if (n or "").lower() == "documents"]
+    if len(usable) == 1:
+        chosen = usable[0][1]
+    elif named:
+        chosen = named[0]
+        say("Several to choose from; taking the default Documents library.")
+        say("If one of the others was made for this, use that instead - an")
+        say("empty library used for nothing else makes `sweep` meaningful.")
         say("")
-        say("Then: python tools/graph_setup.py check")
+    else:
+        say("More than one library and none of them is the default, so this")
+        say("is your choice to make, not mine. Take the id of whichever was")
+        say("made for the renders and put it in .env as GRAPH_DRIVE_ID.")
+        return 1
+
+    say("Put this in .env:")
+    say("")
+    say("GRAPH_DRIVE_ID=%s" % chosen)
+    say("")
+    say("Then: python tools/graph_setup.py check")
     return 0
 
 
@@ -261,6 +323,9 @@ def main(argv=None):
 
     grant = subs.add_parser("grant", help="print the per-site grant to make")
     grant.add_argument("--site", help="host.sharepoint.com:/sites/name")
+    grant.add_argument("--app-name", dest="app_name",
+                       help="the app registration's display name, as IT "
+                            "created it (or set GRAPH_APP_NAME)")
     grant.set_defaults(run=cmd_grant)
 
     disc = subs.add_parser("discover", help="find GRAPH_DRIVE_ID")

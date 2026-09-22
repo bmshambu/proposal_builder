@@ -108,7 +108,8 @@ const CANNED = [
   [/\/api\/libraries$/, [{ id: "demo", name: "Demo", description: "", slides: 3, unnamed: 0, answer_sets: [], real: true }]],
   [/\/thumbs/, [{ id: "cover", title: "Cover", svg: DEMO_SVG, placeholders: [] },
   { id: "scope", title: "Scope", svg: DEMO_SVG, placeholders: ["ClientName"] },
-  { id: "fees", title: "Fees", svg: DEMO_SVG, placeholders: ["FeeTotal"] }]],
+  { id: "fees", title: "Fees", svg: DEMO_SVG, placeholders: ["FeeTotal"] },
+  { id: "dropped", title: "Left out", svg: DEMO_SVG, placeholders: [] }]],
   [/\/rules$/, {
     raw: {}, deck: [{ id: "cover", when: null },
     { id: "scope", when: { field: "AuditType", eq: "Expansion of Services" } },
@@ -122,11 +123,12 @@ const CANNED = [
   }],
   [/\/api\/libraries\/[^/]+$/, {
     library: { id: "demo", name: "Demo", description: "", slides: 3, real: true },
-    blocks: [{ id: "cover", title: "Cover", source: "marker", part: "slide1.xml", placeholders: [] },
-    { id: "scope", title: "Scope", source: "title", part: "slide2.xml", placeholders: ["ClientName"] },
-    { id: "fees", title: "Fees", source: "marker", part: "slide3.xml", placeholders: ["FeeTotal"] }],
+    blocks: [{ id: "cover", title: "Cover", source: "marker", number: 1, part: "slide1.xml", placeholders: [] },
+    { id: "scope", title: "Scope", source: "title", number: 2, part: "slide2.xml", placeholders: ["ClientName"] },
+    { id: "fees", title: "Fees", source: "marker", number: 3, part: "slide3.xml", placeholders: ["FeeTotal"] },
+    { id: "dropped", title: "Left out", source: "map", number: 4, part: "slide4.xml", placeholders: [] }],
     placeholders: ["ClientName", "FeeTotal"], unbound: ["FeeTotal"], unused: [],
-    by_source: { marker: 2, title: 1 }, drift: [], problems: [], has_rules: true,
+    by_source: { marker: 2, title: 1, map: 1 }, drift: [], problems: [], has_rules: true,
   }],
   // The Mark text screen. Two shapes, one of them a table cell, so the check
   // covers both kinds of box the editor has to place.
@@ -269,6 +271,50 @@ try {
   const deckHTML = (boxes["deck"] || {}).innerHTML || "";
   if (!/data-move="/.test(deckHTML))
     problems.push("deck rows offer no way to move a slide by position");
+
+  // Two numbers per row: its position in this list, and the slide's own number
+  // in library.pptx. The second is what an author reads against Templafy while
+  // they set the order, and it has to be there AND be told apart from the
+  // first - a bare second integer in the gutter would be worse than none.
+  const srcs = [...deckHTML.matchAll(/class="src"[^>]*>s(\d+)</g)].map(m => m[1]);
+  if (!srcs.length)
+    problems.push("deck rows do not show the slide's number in library.pptx");
+  if (/>s\?</.test(deckHTML))
+    problems.push("a deck row could not find its slide number");
+  if (!/title="Slide \d+ in library\.pptx"/.test(deckHTML))
+    problems.push("the slide number on a row does not say what it is");
+  const poolHTML = (boxes["pool"] || {}).innerHTML || "";
+  if (poolHTML.includes("pool-item") && !/class="src"/.test(poolHTML))
+    problems.push("a slide out of the deck does not show its number either");
+  console.log("slide numbers: " + srcs.join(", ") + " on the deck rows");
+
+  // "Slide 47 in Templafy - where is it here?" has to be answerable. The
+  // finder reports the row, and reports it differently when the slide is not
+  // in the deck, because that is the answer the author most needs to act on.
+  // Through getElementById, not `boxes`: the stub only makes an element once
+  // the script has asked for one, and the note is not written to until the
+  // finder actually runs.
+  const note = document.getElementById("goto-note");
+  const box = document.getElementById("goto-slide");
+  const go = document.getElementById("goto-go");
+  if (!note || !box || !go || typeof go.onclick !== "function") {
+    problems.push("there is no way to go to a slide by its number");
+  } else {
+    const say = () => (note.innerHTML || note.textContent || "");
+    box.value = "3";              // "fees" - in the deck
+    go.onclick();
+    if (!/s3/.test(say()) || /not in the deck/.test(say()))
+      problems.push("goto: a slide in the deck was not reported as such - " + say());
+    box.value = "4";              // "dropped" - in the library, not the deck
+    go.onclick();
+    if (!/not in the deck/.test(say()))
+      problems.push("goto: a slide out of the deck was not flagged - " + say());
+    box.value = "999";
+    go.onclick();
+    if (!/slides 1 to 4/.test(say()))
+      problems.push("goto: a number with no slide behind it said " + say());
+    console.log("go to slide: in the deck, out of the deck, and out of range");
+  }
 
   // The viewer shows one of two things and must not confuse them: a PNG that
   // PowerPoint exported, or our own SVG approximation. Showing the second while

@@ -12,10 +12,14 @@ library already comes in by.
 
 What carries across, and why:
 
-  * **the rules**, because they address blocks by their `{{block:...}}` marker
-    and marks only change text, so every id still resolves. Not carrying them
-    would mean re-authoring every condition, which is the hardest screen in the
-    tool and the one an author is least able to redo.
+  * **the rules**, because the block ids are carried too (see `save_as`), so
+    every condition still resolves. Not carrying them would mean re-authoring
+    every condition, which is the hardest screen in the tool and the one an
+    author is least able to redo.
+  * **the block ids**, as the sidecar. A firm template has no `{{block:id}}`
+    markers in it - its ids live in `blocks.json`, derived from the titles at
+    import - so anything that re-derives them turns a marked heading into a
+    different block.
   * **the bindings**, with the new ones merged in. A placeholder and the thing
     it is bound to are written together or not at all; a token with no binding
     is a gap somebody has to notice later.
@@ -118,7 +122,14 @@ def save_as(template, root, name, marks, bindings=None, description=""):
         staged = os.path.join(work, "library.pptx")
         with open(staged, "wb") as fh:
             fh.write(data)
-        report = import_deck(staged, root, name=name, description=description)
+        # The sidecar goes with it. `apply_marks` copies every part under its
+        # own name, so the slide -> id mapping still lines up, and without it
+        # the import guesses the ids again from the titles - which a mark on a
+        # heading has just changed. Every rule then names a block that is no
+        # longer there. It fails silently: the new library opens, the rules
+        # load, and the deck simply comes out missing those slides.
+        report = import_deck(staged, root, name=name, description=description,
+                             block_map=template.raw_block_map)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

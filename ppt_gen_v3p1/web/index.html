@@ -248,6 +248,19 @@
         <div class="md" id="suggest-out"></div>
       </div>
 
+      <!-- Setting the order means reading one deck against another: "slide 47
+           in Templafy - where is it here?". The row numbers cannot answer
+           that, because they are positions in this list and move whenever the
+           order does. The slide's own number gets its own way in. It finds
+           slides that are out of the deck too, which is exactly when the
+           question gets asked. -->
+      <div class="finder">
+        <label class="movelab">Go to slide
+          <input type="number" id="goto-slide" min="1" placeholder="47"></label>
+        <button class="btn sm" id="goto-go">Find</button>
+        <span class="fld-note" id="goto-note"></span>
+      </div>
+
       <div class="deck" id="deck"></div>
     </div>
   </div>

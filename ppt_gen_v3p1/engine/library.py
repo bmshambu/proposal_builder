@@ -50,19 +50,34 @@ def slugify(text, fallback="block"):
     return s or fallback
 
 
+def _visible(text):
+    """Title text with any `{{Placeholder}}` taken out of it.
+
+    A marked-up heading still names its slide. This used to skip any text
+    beginning with `{{`, so that a shape holding only a `{{block:id}}` marker
+    was never read as a title — but it also threw the title away the moment an
+    author bound something into its first word, and the id was then taken from
+    whatever text came next on the slide, which is usually the footer. Removing
+    the tokens keeps the marker box out (nothing is left of it) and keeps the
+    heading.
+    """
+    return re.sub(r"\s+", " ",
+                  placeholders.PLACEHOLDER.sub("", text or "")).strip()
+
+
 def slide_title(xml):
     """Best-effort title text for a slide. Empty string if it has no text."""
     for pattern in (_PH_TITLE, _NAMED_TITLE):
         m = pattern.search(xml)
         if m:
             text = " ".join(t for t in _A_T.findall(m.group(0)) if t.strip())
-            text = ooxml.xml_unescape(text).strip()
-            if text and not text.startswith("{{"):
-                return re.sub(r"\s+", " ", text)
+            text = _visible(ooxml.xml_unescape(text))
+            if text:
+                return text
     for t in _A_T.findall(xml):
-        text = ooxml.xml_unescape(t).strip()
-        if text and not text.startswith("{{"):
-            return re.sub(r"\s+", " ", text)
+        text = _visible(ooxml.xml_unescape(t))
+        if text:
+            return text
     return ""
 
 
@@ -241,7 +256,7 @@ class Library:
 
     def summary(self):
         return [{"id": b.id, "slide": os.path.basename(b.part), "source": b.source,
-                 "marked": b.marked, "title": b.title,
+                 "number": b.index + 1, "marked": b.marked, "title": b.title,
                  "placeholders": sorted(b.placeholders)}
                 for b in self.ordered()]
 

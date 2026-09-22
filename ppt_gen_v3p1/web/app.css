@@ -215,6 +215,23 @@ main{padding:16px 18px 30vh}
 .del:hover{color:var(--bad)}
 .status{font-size:11px;width:62px;text-align:right;color:var(--off);flex-shrink:0}
 
+/* The slide's number in library.pptx, beside its position in the list. Two
+   numbers, so they are told apart by sight before they are read: this one is
+   monospaced, prefixed and ruled off, and it is never the number "Move to"
+   means. Four characters wide - s130 fits, and a library past 999 slides is
+   not a library. */
+.src{width:34px;flex-shrink:0;font-family:var(--mono);font-size:11px;
+  color:var(--off);text-align:right;padding-right:8px;
+  border-right:1px solid var(--line);font-variant-numeric:tabular-nums}
+.src.none{color:var(--off-soft)}
+.pool-item .src{border-right:none;padding-right:2px;width:auto}
+.row.found{animation:landed 1.6s ease-out}
+.pool-item.found{animation:landed 1.6s ease-out;border-color:var(--accent)}
+
+/* Sits between the rule bar and the list, because it acts on the list. */
+.finder{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:8px 10px;border-bottom:1px solid var(--line)}
+
 /* Move-to: dragging is fine for ten slides and miserable for a hundred. Styled
    like the condition editor because it is the same idea - a row opening to
    reveal one control. */
@@ -228,6 +245,7 @@ main{padding:16px 18px 30vh}
   margin:2px 8px 10px 60px;background:var(--panel-2);border:1px solid var(--line);
   border-left:3px solid var(--accent);border-radius:6px;padding:10px 12px}
 .moverow .m{font-size:12.5px;color:var(--muted)}
+.moverow .m .src{width:auto;border-right:none;padding-right:0}
 .moverow .m b{color:var(--ink)}
 .movelab{display:flex;align-items:center;gap:6px;font-size:12.5px}
 .movelab input{width:80px}
