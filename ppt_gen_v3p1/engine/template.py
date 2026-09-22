@@ -138,7 +138,11 @@ class Template:
         if not raw:
             return {"moved": [], "unmatched": [], "vanished": [], "changed": False}
 
-        with self.open_library() as lib:
+        # No sidecar: it keys on part names, and anything that renumbered the
+        # parts is exactly the situation this is here to repair. Through the
+        # stale map the ids land on the wrong slides, and where one collides
+        # with a marker the deck will not open at all.
+        with Library(self.library_path) as lib:
             current = [(os.path.basename(b.part), b.title) for b in lib.ordered()]
 
         def entry_title(e):
@@ -242,9 +246,76 @@ def find_template(root, name_or_path):
            ", ".join(t.name for t in list_templates(root)) or "none"))
 
 
+# ------------------------------------------------------- carrying ids over
+def _unique(bid, taken):
+    n, out = 2, bid
+    while out in taken:
+        out = "%s_%d" % (bid, n)
+        n += 1
+    return out
+
+
+def carry_ids(old_raw, lib):
+    """Match a template's existing block ids onto a deck that has changed.
+
+    -> (sidecar, report)
+
+    This is what stops an author losing a week of rules because somebody
+    added a slide in PowerPoint. Rules address blocks by id, so if the ids are
+    derived afresh from a deck whose slides have moved, every rule names
+    something that is no longer there.
+
+    Matched in this order, first hit wins:
+
+      1. a `{{block:id}}` marker, which is anchored to the slide itself and
+         cannot be argued with,
+      2. the title recorded in the sidecar when the id was assigned - the only
+         thing that survives PowerPoint renumbering every part,
+      3. nothing: the slide is new, and takes the id the library derived for
+         itself.
+
+    A slide **retitled in the same edit** matches on neither and is reported as
+    one gone and one added. No algorithm fixes that; it needs the author, and
+    saying so is better than pairing two slides on a guess.
+    """
+    rows = [[p, _entry_id(e), (e.get("title") if isinstance(e, dict) else None)]
+            for p, e in (old_raw or {}).items()]
+    unused = [r for r in rows if r[1]]
+    # Markers are claimed before anything is matched: a title match must never
+    # take an id that a marker elsewhere in the deck already owns, or the
+    # sidecar names two slides the same and the library will not open at all.
+    taken = {b.id for b in lib.ordered() if b.source == "marker"}
+    sidecar, matched, added = {}, [], []
+
+    for b in lib.ordered():
+        part = os.path.basename(b.part)
+        if b.source == "marker":
+            sidecar[part] = {"id": b.id, "title": b.title}
+            matched.append({"id": b.id, "slide": part, "by": "marker"})
+            unused = [r for r in unused if r[1] != b.id]
+            continue
+        hit = next((r for r in unused
+                    if r[2] and r[2] == b.title and r[1] not in taken), None)
+        if hit:
+            unused.remove(hit)
+            taken.add(hit[1])
+            sidecar[part] = {"id": hit[1], "title": b.title}
+            matched.append({"id": hit[1], "slide": part, "by": "title",
+                            "was": hit[0]})
+        else:
+            bid = _unique(b.id, taken)
+            taken.add(bid)
+            sidecar[part] = {"id": bid, "title": b.title}
+            added.append({"id": bid, "slide": part, "title": b.title})
+
+    gone = [{"id": r[1], "title": r[2], "was": r[0]} for r in unused]
+    return sidecar, {"matched": matched, "added": added, "gone": gone,
+                     "kept": len(matched), "of": len([r for r in rows if r[1]])}
+
+
 # ---------------------------------------------------------------- import
 def import_deck(src_pptx, root, name=None, description="", overwrite=False,
-                keep_source_name=False, block_map=None):
+                keep_source_name=False, block_map=None, fresh=False):
     """Turn any `.pptx` into a template folder. Returns a report dict.
 
     Nothing about the deck is modified — it is copied verbatim. Identity comes
@@ -254,6 +325,17 @@ def import_deck(src_pptx, root, name=None, description="", overwrite=False,
     deck being imported is a known edit of a deck already named: saving an
     author's marks. Without it the ids are guessed again from the titles, and a
     mark that touches a heading renames the block it was made on.
+
+    Importing over a template that already exists **keeps its rules**, its
+    answer sets and its data stubs, and carries the block ids onto the new
+    deck - see `carry_ids`. Only the deck and the PDF cut from it are replaced.
+    It used to delete the folder outright, which took rules.json with it *and
+    every rules.json.<stamp>.bak beside it*: the one operation an author needed
+    to undo was the one that destroyed the means of undoing it. An author who
+    adds a slide in PowerPoint and re-uploads had to re-author every condition.
+
+    `fresh=True` is the old behaviour, for when replacing really does mean
+    starting over.
     """
     src_pptx = str(src_pptx)
     if not os.path.exists(src_pptx):
@@ -265,21 +347,41 @@ def import_deck(src_pptx, root, name=None, description="", overwrite=False,
     from .library import slugify
     name = name or slugify(stem, fallback="template")
     folder = os.path.join(str(root), name)
+    carried, replacing = None, False
     if os.path.exists(folder):
         if not overwrite:
             raise TemplateError(
                 "template %r already exists at %s — pass overwrite to replace it"
                 % (name, folder))
-        shutil.rmtree(folder)
-    os.makedirs(folder)
+        if fresh:
+            shutil.rmtree(folder)
+        else:
+            replacing = True
+            carried = _read_json(os.path.join(folder, BLOCKS), {}) or {}
+            carried = carried.get("blocks", carried)
+            # The deck is being replaced, so the PDF cut from it is stale by
+            # definition - it would preview the slides that just went away.
+            # Everything else in the folder is the author's and stays.
+            for entry in os.listdir(folder):
+                if entry.lower().endswith((".pptx", ".pdf")):
+                    os.remove(os.path.join(folder, entry))
+    if not os.path.isdir(folder):
+        os.makedirs(folder)
 
     library_name = (os.path.basename(src_pptx) if keep_source_name else LIBRARY)
     shutil.copy(src_pptx, os.path.join(folder, library_name))
 
     try:
+        # Opened WITHOUT the old sidecar. It maps part names, and PowerPoint
+        # renumbers those on every save, so on a replaced deck it names the
+        # wrong slides - and where it collides with a marker the library will
+        # not open at all. The ids are carried over afterwards, by title.
         with Library(os.path.join(folder, library_name),
                      block_map=block_map) as lib:
             mapping = lib.suggest_block_map()
+            carry = None
+            if replacing:
+                mapping, carry = carry_ids(carried, lib)
             summary = lib.summary()
             found_placeholders = sorted(lib.all_placeholders())
             markers = sum(1 for b in lib.blocks.values() if b.source == "marker")
@@ -299,6 +401,21 @@ def import_deck(src_pptx, root, name=None, description="", overwrite=False,
         "source_deck": os.path.basename(src_pptx),
     })
 
+    # Rules an author already wrote are never overwritten. Starter rules are
+    # for a template that has none - writing them over a real rules.json is
+    # exactly the loss this whole path exists to stop.
+    if replacing and os.path.exists(tpl.rules_path):
+        report = {"name": name, "folder": folder,
+                  "library": os.path.join(folder, library_name),
+                  "slides": len(mapping), "blocks": summary,
+                  "ids_from_markers": markers, "ids_from_titles": guessed,
+                  "ids_from_position": positional,
+                  "placeholders": found_placeholders,
+                  "replaced": True, "rules_kept": True, "carried": carry}
+        with Library(tpl.library_path, block_map=tpl.raw_block_map) as lib:
+            report["dangling"] = tpl.load_rules().check_against(lib)
+        return report
+
     order = [e["id"] for e in mapping.values()]
     _write_json(os.path.join(folder, RULES), {
         "name": name,
@@ -317,4 +434,6 @@ def import_deck(src_pptx, root, name=None, description="", overwrite=False,
             "slides": len(mapping), "blocks": summary,
             "ids_from_markers": markers, "ids_from_titles": guessed,
             "ids_from_position": positional,
-            "placeholders": found_placeholders}
+            "placeholders": found_placeholders,
+            "replaced": replacing, "rules_kept": False, "carried": carry,
+            "dangling": []}

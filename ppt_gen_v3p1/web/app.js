@@ -437,8 +437,9 @@ async function uploadLibrary() {
   }
   const exists = S.libs.some(l => l.id === name);
   if (exists && !confirm(
-    `"${name}" already exists.\n\nReplacing it overwrites its library AND its `
-    + `rules. This cannot be undone from here.\n\nReplace it?`)) return;
+    `"${name}" already exists.\n\nThe deck is replaced. Its rules, answer sets `
+    + `and earlier versions are kept, and the block ids are carried onto `
+    + `the new slides by title.\n\nReplace the deck?`)) return;
 
   const form = new FormData();
   form.append("file", file);
@@ -450,6 +451,19 @@ async function uploadLibrary() {
   try {
     const r = await api("/api/libraries", { method: "POST", body: form });
     flash(`Imported ${r.imported.slides} slides as "${name}"`, "ok");
+    // Replacing a deck is the one import where what happened to the EXISTING
+    // work is the interesting part. Said in the order an author has to act on
+    // it: what was kept, what arrived, and what is now broken.
+    const c = r.imported.carried;
+    if (c) {
+      flash(`Kept ${c.kept} of ${c.of} block ids — your rules came with them`, "ok");
+      if (c.added.length)
+        flash(`${c.added.length} new slide(s), in no rule yet: `
+          + c.added.map(a => a.title || a.id).join(", "), "ok");
+      (r.imported.dangling || []).forEach(msg => flash(msg, "bad"));
+      if (c.gone.length && !(r.imported.dangling || []).length)
+        flash(`${c.gone.length} slide(s) gone, and no rule referred to them`, "ok");
+    }
     // A refused PDF is not a failed import, but it is not nothing either: the
     // viewer will fall back and nobody would know why unless it is said here.
     const p = r.imported.preview || {};
@@ -469,7 +483,7 @@ $("lib-name").oninput = function () {
   note.className = "fld-note" + ((clash || bad) ? " warn" : "");
   note.textContent = !v ? "Required — this becomes the folder name."
     : bad ? "Lower case, digits and underscores only — it becomes a folder name."
-      : clash ? `"${v}" already exists. Uploading replaces it, including its rules.`
+      : clash ? `"${v}" already exists. Uploading replaces its deck and keeps its rules.`
         : `Saves to templates/${v}/ — its own library.pptx, rules.json and bindings.`;
 };
 

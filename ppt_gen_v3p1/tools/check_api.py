@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient                          # noqa: E402
 
 import app as appmod                                               # noqa: E402
 from engine import Template, build_template                        # noqa: E402
+from engine import ooxml as ooxmlmod                               # noqa: E402
 
 client = TestClient(appmod.app)
 
@@ -36,6 +37,75 @@ PASS, FAIL = [], []
 def check(label, ok, detail=""):
     (PASS if ok else FAIL).append(label)
     print("  %-4s %-36s %s" % ("ok" if ok else "FAIL", label, detail))
+
+
+def _edited_deck(src, drop, out):
+    """The demo deck as PowerPoint would hand it back: one slide deleted, one
+    added, and **every part renumbered**.
+
+    The renumbering is the whole point. Keep the part names and a stale
+    blocks.json happens to still be right, so a check built on a gentler edit
+    passes while the real thing loses a week of rules.
+    """
+    import re
+    zs = zipfile.ZipFile(src)
+    prs = zs.read("ppt/presentation.xml").decode()
+    rels = zs.read("ppt/_rels/presentation.xml.rels").decode()
+    rid2part = {}
+    for tag in re.findall(r"<Relationship[^>]*/>", rels):
+        if "slides/slide" in tag and "slideLayout" not in tag:
+            rid2part[re.search(r'Id="([^"]+)"', tag).group(1)] = (
+                "ppt/slides/"
+                + re.search(r'Target="[^"]*slides/([^"]+)"', tag).group(1))
+    order = [rid2part[m.group(1)] for m in
+             re.finditer(r'<p:sldId[^>]*?r:id="([^"]+)"[^>]*/>', prs)]
+    kept = [p for i, p in enumerate(order, 1) if i != drop]
+
+    # the new slide: the last one copied, retitled, its block marker removed
+    from engine import placeholders as _ph
+    extra = _ph.strip_marker(zs.read(kept[-1]).decode())
+    first = re.search(r"<a:t(?:\s[^>]*)?>(.*?)</a:t>", extra)
+    extra = extra[:first.start(1)] + "Transition plan" + extra[first.end(1):]
+
+    rename = {p: "ppt/slides/slide%d.xml" % (i + 1) for i, p in enumerate(kept)}
+    newpart = "ppt/slides/slide%d.xml" % (len(kept) + 1)
+    tags = [t for t in re.findall(r"<Relationship[^>]*/>", rels)
+            if not ("slides/slide" in t and "slideLayout" not in t)]
+    sld = ""
+    for i, part in enumerate([rename[p] for p in kept] + [newpart], 1):
+        tags.append('<Relationship Id="rS%d" Type="http://schemas.openxmlformats'
+                    '.org/officeDocument/2006/relationships/slide" '
+                    'Target="slides/%s"/>' % (i, os.path.basename(part)))
+        sld += '<p:sldId id="%d" r:id="rS%d"/>' % (300 + i, i)
+
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zo:
+        for info in zs.infolist():
+            name = info.filename
+            if name == "ppt/presentation.xml":
+                zo.writestr(name, re.sub(r"<p:sldIdLst>.*?</p:sldIdLst>",
+                                         "<p:sldIdLst>%s</p:sldIdLst>" % sld,
+                                         prs, flags=re.S))
+            elif name == "ppt/_rels/presentation.xml.rels":
+                zo.writestr(name, ooxmlmod.build_rels(tags))
+            elif name == "[Content_Types].xml":
+                zo.writestr(name, zs.read(name).decode().replace(
+                    "</Types>", '<Override PartName="/%s" ContentType="%s"/>'
+                    "</Types>" % (newpart, ooxmlmod.CT_SLIDE)))
+            elif re.match(r"ppt/slides/slide\d+\.xml$", name):
+                if name in rename:
+                    zo.writestr(rename[name], zs.read(name))
+            elif name.startswith("ppt/slides/_rels/"):
+                base = "ppt/slides/" + os.path.basename(name)[:-5]
+                if base in rename:
+                    zo.writestr("ppt/slides/_rels/%s.rels"
+                                % os.path.basename(rename[base]), zs.read(name))
+            else:
+                zo.writestr(info, zs.read(name))
+        zo.writestr(newpart, extra)
+        zo.writestr("ppt/slides/_rels/%s.rels" % os.path.basename(newpart),
+                    zs.read("ppt/slides/_rels/%s.rels"
+                            % os.path.basename(kept[-1])))
+    zs.close()
 
 
 def _no_network(*_args, **_kwargs):
@@ -958,6 +1028,102 @@ def _run():
               "fell back to %s" % fell["engine"])
     for gone in ("demo_pdf", "demo_badpdf", "demo_nopdf"):
         shutil.rmtree(os.path.join(appmod.TEMPLATES, gone), ignore_errors=True)
+
+    # ------------------------------- replacing the deck of a live library
+    #
+    # An author adds a slide in PowerPoint and uploads the deck again. This
+    # used to delete the template folder, which took rules.json with it AND
+    # every rules.json.<stamp>.bak beside it - the one operation an author
+    # needed to undo destroyed the means of undoing it, and a week of
+    # conditions went with it.
+    rp_root = tempfile.mkdtemp(prefix="pptgen-check-replace-")
+    try:
+        rp_src = os.path.join(tpl_demo.folder, "library.pptx")
+        import_deck(rp_src, rp_root, name="live")
+        rp = find_template(rp_root, "live")
+        with rp.open_library() as lib:
+            rp_ids = [b.id for b in lib.ordered()]
+
+        # the week of work: one slide made conditional, an answer set, and one
+        # earlier version of the rules
+        rp_spec = json.load(open(rp.rules_path, encoding="utf-8"))
+        rp_spec["baseline"] = [i for i in rp_ids if i != rp_ids[-1]]
+        rp_spec["blocks"] = {rp_ids[-1]: {"when": {"field": "AuditType",
+                                                   "eq": "Expansion"}}}
+        with open(rp.rules_path, "w", encoding="utf-8") as fh:
+            json.dump(rp_spec, fh, indent=2)
+        shutil.copy(rp.rules_path, rp.rules_path + ".20260101-000000.bak")
+        with open(os.path.join(rp.folder, "answers.mine.json"), "w") as fh:
+            fh.write("{}")
+        with open(os.path.join(rp.folder, "library.pdf"), "w") as fh:
+            fh.write("stale")
+
+        rp_new = os.path.join(rp_root, "edited.pptx")
+        _edited_deck(rp_src, 3, rp_new)
+        rp_rep = import_deck(rp_new, rp_root, name="live", overwrite=True)
+        rp_files = set(os.listdir(rp.folder))
+        rp_now = json.load(open(rp.rules_path, encoding="utf-8"))
+
+        check("replacing a deck keeps the rules an author wrote",
+              rp_rep["rules_kept"] and bool(rp_now.get("blocks")),
+              "%d condition(s) still there" % len(rp_now.get("blocks") or {}))
+        check("and the answer sets and the rules history beside them",
+              {"answers.mine.json", "rules.json.20260101-000000.bak"} <= rp_files,
+              ", ".join(sorted(rp_files))[:56])
+        check("and drops the PDF, which would preview slides that are gone",
+              "library.pdf" not in rp_files)
+
+        rp_c = rp_rep["carried"]
+        check("the block ids are carried onto the renumbered slides",
+              rp_c["kept"] == len(rp_ids) - 1 and rp_c["of"] == len(rp_ids),
+              "kept %d of %d" % (rp_c["kept"], rp_c["of"]))
+        check("the added slide is reported, never silently put in the deck",
+              len(rp_c["added"]) == 1
+              and rp_c["added"][0]["id"] not in (rp_now.get("baseline") or []),
+              "new: %s" % (rp_c["added"][0]["title"] if rp_c["added"] else "none"))
+        check("the slide that went away is named, with the rules it breaks",
+              len(rp_c["gone"]) == 1 and bool(rp_rep["dangling"]),
+              "%s - %s" % (rp_c["gone"][0]["id"] if rp_c["gone"] else "none",
+                           (rp_rep["dangling"] or ["-"])[0][:38]))
+
+        # duplicate ids are not a warning, they stop the library opening at all
+        with rp.open_library() as lib:
+            rp_after = [b.id for b in lib.ordered()]
+        check("and the library it leaves behind still opens",
+              len(set(rp_after)) == len(rp_after),
+              "%d id(s), all unique" % len(rp_after))
+
+        # A firm template carries no markers, so the recorded title is the only
+        # thing doing the matching. That is the deck this has to hold for.
+        rp_plain = os.path.join(rp_root, "plain.pptx")
+        with zipfile.ZipFile(rp_src) as zs,                 zipfile.ZipFile(rp_plain, "w", zipfile.ZIP_DEFLATED) as zo:
+            for info in zs.infolist():
+                data = zs.read(info.filename)
+                if info.filename.startswith("ppt/slides/slide"):
+                    data = phmod.BLOCK_MARKER.sub(
+                        "", data.decode("utf-8")).encode("utf-8")
+                zo.writestr(info, data)
+        import_deck(rp_plain, rp_root, name="firm")
+        rp_f = find_template(rp_root, "firm")
+        rp_fnew = os.path.join(rp_root, "firm-edited.pptx")
+        _edited_deck(rp_plain, 3, rp_fnew)
+        rp_frep = import_deck(rp_fnew, rp_root, name="firm", overwrite=True)
+        rp_fc = rp_frep["carried"]
+        check("a deck with no markers matches on the recorded title alone",
+              rp_fc["kept"] == len(rp_ids) - 1
+              and all(m["by"] == "title" for m in rp_fc["matched"]),
+              "kept %d of %d, all by title" % (rp_fc["kept"], rp_fc["of"]))
+
+        # "replace" sometimes really does mean start over, so keep that door
+        rp_fresh = import_deck(rp_new, rp_root, name="live", overwrite=True,
+                               fresh=True)
+        check("fresh=True still starts the library over",
+              not rp_fresh["rules_kept"]
+              and not json.load(open(rp.rules_path,
+                                     encoding="utf-8")).get("blocks"),
+              "rules back to the starter set")
+    finally:
+        shutil.rmtree(rp_root, ignore_errors=True)
 
     # ------------------------------------------------------------ refusals
     r = client.post("/api/libraries", files={"file": ("x.pptx", b"PK\x03\x04")},

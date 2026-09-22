@@ -493,6 +493,7 @@ async def post_library(
     name: str = Form(..., description="becomes the folder under templates/"),
     description: str = Form(""),
     overwrite: bool = Form(False),
+    fresh: bool = Form(False),
     pdf: Optional[UploadFile] = File(
         None, description="a PDF of the same deck, one page per slide"),
 ):
@@ -500,8 +501,14 @@ async def post_library(
 
     The name is given, never derived from the filename: it becomes the folder
     and the id every rule and binding refers to, so it is not a label that can
-    be tidied up later. Importing over an existing name replaces that library
-    *including its rules*, which is why `overwrite` has to be asked for.
+    be tidied up later.
+
+    Importing over an existing name replaces the **deck**, and keeps that
+    library's rules, answer sets, data stubs and rules history. The block ids
+    are carried onto the new slides by title, so an author who added a slide in
+    PowerPoint gets their conditions back rather than a blank rules.json - the
+    report says what matched, what is new and what went away. `fresh=true` is
+    the old behaviour and really does start over.
 
     The PDF is what makes previews work anywhere. A deck is assembled by copying
     slides out of the library, so a preview is assembled by copying pages out of
@@ -518,7 +525,8 @@ async def post_library(
         pdf_path = await take_upload(pdf, ".pdf", tmpdir) if pdf else None
         with WRITE_LOCK:
             report = import_deck(path, TEMPLATES, name=name,
-                                 description=description, overwrite=overwrite)
+                                 description=description, overwrite=overwrite,
+                                 fresh=fresh)
             tpl = find_template(TEMPLATES, name)
             report["preview"] = attach_pdf(tpl, pdf_path)
     except TemplateError as exc:

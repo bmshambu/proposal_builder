@@ -55,8 +55,28 @@ library**.
 The `.pdf` is optional but the preview depends on it. Without one, import still
 succeeds and says so; the viewer falls back to an approximation.
 
-Re-importing under an existing name replaces the library **and its rules**, and
-asks first.
+**Re-importing under an existing name replaces the deck and keeps everything
+else** — your rules, your answer sets, your data stubs, and the rules history
+behind *Earlier versions*. It asks first.
+
+This is the path for the ordinary thing: you added or deleted a slide in
+PowerPoint and want the library to catch up. PowerPoint renumbers every slide
+part when it saves, so the block ids are carried onto the new slides — by a
+`{{block:id}}` marker where one exists, otherwise by the slide title recorded
+when the id was assigned. The import then tells you three things:
+
+- how many ids were **kept** — those rules came through untouched;
+- which slides are **new**. They are in the library but in no rule, so they
+  appear in no deck until you add them on the Rules screen. A slide that
+  silently joined every proposal would be the worse default;
+- which slides are **gone**, and the rules that now name nothing. Fix those on
+  the Rules screen; a deck will not build until you do.
+
+A slide that was **retitled in the same edit** matches on neither its marker
+nor its title, so it is reported as one gone and one new. Nothing can tell
+those apart from a genuine swap — put the rule back on the new id.
+
+If replacing really should mean starting over, the API takes `fresh=true`.
 
 ### 2 · Questions — upload answer sets
 
