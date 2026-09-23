@@ -173,7 +173,7 @@ global.fetch = async (url) => {
 try {
   // app.js is strict mode, so its scope does not leak into ours. Ask for the
   // one function this file needs to test directly.
-  eval(js + "\n;globalThis.__readValue = readValue; globalThis.__formatted = formatted; globalThis.__md = md; globalThis.__viewer = { load: loadBuiltSlides, big, small }; globalThis.__moveRow = moveRow; globalThis.__cond = { parts: condParts, build: partsCond, text: condText, plain: condPlain, holds: (w, a) => { const was = S.answers; S.answers = a; try { return holds(w); } finally { S.answers = was; } } }; globalThis.__showTab = showTab; globalThis.__renderMark = renderMark; globalThis.__mkShapeHTML = mkShapeHTML; globalThis.__MK = MK; globalThis.__renderQuestionForm = renderQuestionForm; globalThis.__qfAdd = qfAdd; globalThis.__QFOFF = QFOFF; globalThis.__QFADD = QFADD;");
+  eval(js + "\n;globalThis.__readValue = readValue; globalThis.__formatted = formatted; globalThis.__md = md; globalThis.__viewer = { load: loadBuiltSlides, big, small }; globalThis.__moveRow = moveRow; globalThis.__cond = { parts: condParts, build: partsCond, text: condText, plain: condPlain, editorJoin, openAt: (w) => { const p = condParts(w); S.condRows = p.parts.length || 1; S.condJoin = p.join; }, pickJoin: (j) => { S.condJoin = j; }, holds: (w, a) => { const was = S.answers; S.answers = a; try { return holds(w); } finally { S.answers = was; } } }; globalThis.__showTab = showTab; globalThis.__renderMark = renderMark; globalThis.__mkShapeHTML = mkShapeHTML; globalThis.__MK = MK; globalThis.__renderQuestionForm = renderQuestionForm; globalThis.__qfAdd = qfAdd; globalThis.__QFOFF = QFOFF; globalThis.__QFADD = QFADD;");
 } catch (err) {
   problems.push("the page threw while initialising: " + err.message);
 }
@@ -274,6 +274,8 @@ try {
   // author the slide was in EVERY deck, and wrote null over the rule the
   // moment anybody opened that row and pressed Apply. So these check the three
   // separately - the chip, the preview, and the round trip.
+  // what row.when actually holds while the second clause is still blank
+  const partsOrNull = (C, leaf) => C.build("any", [leaf, {}]);
   const C = globalThis.__cond;
   if (!C) {
     problems.push("the condition helpers never got defined");
@@ -335,8 +337,32 @@ try {
       problems.push("a rule too complex to draw is not labelled as such");
     if (C.plain(nested) !== JSON.stringify(nested))
       problems.push("a rule too complex to draw does not show its JSON");
+    // 5. picking "or" has to survive the re-render that follows it.
+    //
+    // This is how or was unreachable in practice. The author opens a rule with
+    // one clause, clicks "+ Add a condition", and picks "any one of these"
+    // while the second row is still blank. partsCond drops the blank row, the
+    // condition collapses back to a bare clause, and if the dropdown is drawn
+    // from that clause it reads "all" again. Every attempt to choose or landed
+    // back on and.
+    C.openAt(A);                       // editing a rule with one clause
+    C.pickJoin("any");                 // author picks "any one of these"
+    if (C.editorJoin(partsOrNull(C, A)) !== "any")
+      problems.push("picking or does not survive the re-render - "
+        + "it fell back to " + C.editorJoin(A));
+    C.openAt(OR);                      // and an existing OR rule opens as one
+    if (C.editorJoin(OR) !== "any")
+      problems.push("an existing OR rule opens showing and");
+    C.openAt(AND);
+    if (C.editorJoin(AND) !== "all")
+      problems.push("an existing AND rule opens showing or");
+    C.openAt(null);                    // a fresh rule starts on and
+    if (C.editorJoin(null) !== "all")
+      problems.push("a rule with no condition should start on and");
+
     console.log("and/or: " + rows.length + " truth-table case(s), "
-      + "4 round trip(s), nested and `not` refused");
+      + "4 round trip(s), or survives a half-filled clause, "
+      + "nested and `not` refused");
   }
 
   // The affordance has to be on the row, or the feature is undiscoverable.

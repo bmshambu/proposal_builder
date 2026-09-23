@@ -106,7 +106,7 @@ const S = {
   fields: {}, presets: [],
   answers: {},
   dirty: false, editing: null, moving: null, built: null,
-  condRows: 1,                        // clause rows drawn in the open editor
+  condRows: 1, condJoin: "all",       // the open editor's clause rows and join
   check: { ours: null, templafy: null },
   slides: [], slideAt: 0,        // the built deck, for the viewer
   stage: { pptx: null, pdf: null },   // an import waiting for both its files
@@ -773,6 +773,21 @@ function condRowHTML(p, i, n, join) {
  *  copy of this state is a second thing to get wrong - and getting it wrong
  *  means silently writing a different rule than the one on screen.
  */
+/** The join the editor should show.
+ *
+ *  Deliberately NOT read back out of row.when. Until a second clause has a
+ *  field, `partsCond` collapses the condition to a bare clause - correctly,
+ *  because {"any": [x]} is not a thing worth writing - and the group is the
+ *  only place the author's choice of "or" was being kept. So picking "any one
+ *  of these" on a half-filled second row snapped straight back to "all", and
+ *  or was unreachable: by the time both clauses were filled the rule had
+ *  already been rebuilt as "all". The choice belongs to the editing session,
+ *  not to the rule.
+ */
+function editorJoin(when) {
+  return S.condJoin || condParts(when).join;
+}
+
 function readEditor(ed) {
   const joinEl = ed.querySelector("[data-join]");
   const parts = [...ed.querySelectorAll(".cond-row")].map(el => {
@@ -786,11 +801,12 @@ function readEditor(ed) {
         .map(x => x.trim()).filter(Boolean) };
     return { field, [op]: v ? readValue(v) : "" };
   });
-  return { join: joinEl ? joinEl.value : "all", parts };
+  return { join: joinEl ? joinEl.value : (S.condJoin || "all"), parts };
 }
 
 function editorHTML(row) {
-  const { join, parts, ok } = condParts(row.when);
+  const { parts, ok } = condParts(row.when);
+  const join = editorJoin(row.when);
   const names = Object.keys(S.fields);
   if (!ok)
     return `<div class="editor">
@@ -1852,7 +1868,9 @@ document.addEventListener("click", (e) => {
     // a row an author has added but not yet filled in holds no clause, so
     // rebuilding from `when` would make it vanish as they reached for it.
     const opening = S.deck.find(r => r.id === S.editing);
-    S.condRows = opening ? (condParts(opening.when).parts.length || 1) : 1;
+    const was = opening ? condParts(opening.when) : { parts: [], join: "all" };
+    S.condRows = was.parts.length || 1;
+    S.condJoin = was.join;
     renderDeck(); return;
   } else if (t.dataset.cancel !== undefined) { S.editing = null; renderDeck(); return; }
   else if (t.dataset.apply !== undefined) {
@@ -1888,6 +1906,7 @@ document.addEventListener("change", (e) => {
   if (t.matches("[data-f],[data-o],[data-join]")) {
     const ed = t.closest(".editor");
     const row = S.deck.find(r => r.id === S.editing);
+    if (t.matches("[data-join]")) S.condJoin = t.value;
     const { join, parts } = readEditor(ed);
     // A new field or a new operator makes the old value meaningless - a date
     // left over from a text field, or a list left over from `is one of`. Only
