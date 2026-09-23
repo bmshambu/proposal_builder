@@ -173,7 +173,7 @@ global.fetch = async (url) => {
 try {
   // app.js is strict mode, so its scope does not leak into ours. Ask for the
   // one function this file needs to test directly.
-  eval(js + "\n;globalThis.__readValue = readValue; globalThis.__formatted = formatted; globalThis.__md = md; globalThis.__viewer = { load: loadBuiltSlides, big, small }; globalThis.__moveRow = moveRow; globalThis.__showTab = showTab; globalThis.__renderMark = renderMark; globalThis.__mkShapeHTML = mkShapeHTML; globalThis.__MK = MK; globalThis.__renderQuestionForm = renderQuestionForm; globalThis.__qfAdd = qfAdd; globalThis.__QFOFF = QFOFF; globalThis.__QFADD = QFADD;");
+  eval(js + "\n;globalThis.__readValue = readValue; globalThis.__formatted = formatted; globalThis.__md = md; globalThis.__viewer = { load: loadBuiltSlides, big, small }; globalThis.__moveRow = moveRow; globalThis.__cond = { parts: condParts, build: partsCond, text: condText, plain: condPlain, holds: (w, a) => { const was = S.answers; S.answers = a; try { return holds(w); } finally { S.answers = was; } } }; globalThis.__showTab = showTab; globalThis.__renderMark = renderMark; globalThis.__mkShapeHTML = mkShapeHTML; globalThis.__MK = MK; globalThis.__renderQuestionForm = renderQuestionForm; globalThis.__qfAdd = qfAdd; globalThis.__QFOFF = QFOFF; globalThis.__QFADD = QFADD;");
 } catch (err) {
   problems.push("the page threw while initialising: " + err.message);
 }
@@ -265,6 +265,78 @@ try {
     if (ids(deck5) !== "abcde")
       problems.push("moveRow mutated the deck it was given");
     console.log("moveRow: " + moves.length + " case(s) checked");
+  }
+
+  // ---- and / or --------------------------------------------------------
+  //
+  // rules.py has always understood {all:[...]} and {any:[...]}. The screen did
+  // not: it read no `field` on a group, drew the chip as "undefined", told the
+  // author the slide was in EVERY deck, and wrote null over the rule the
+  // moment anybody opened that row and pressed Apply. So these check the three
+  // separately - the chip, the preview, and the round trip.
+  const C = globalThis.__cond;
+  if (!C) {
+    problems.push("the condition helpers never got defined");
+  } else {
+    const A = { field: "AuditType", eq: "Expansion" };
+    const B = { field: "NeedsTransition", eq: true };
+    const OR = { any: [A, B] }, AND = { all: [A, B] };
+
+    // 1. the chip says which rule it is, and never "undefined"
+    const chip = (w) => JSON.stringify(C.text(w));
+    if (!/"more":"or 1 more"/.test(chip(OR)))
+      problems.push("an OR rule does not say so on the row: " + chip(OR));
+    if (!/"more":"and 1 more"/.test(chip(AND)))
+      problems.push("an AND rule does not say so on the row: " + chip(AND));
+    if (/undefined/.test(chip(OR) + chip(AND)))
+      problems.push("a grouped rule renders as undefined on the row");
+    if (C.text(null).lab !== "always")
+      problems.push("no condition should read as always");
+
+    // 2. the greying preview agrees with rules.py, which is the whole promise
+    //    that function makes. Truth table, both joins.
+    const rows = [
+      [OR, { AuditType: "Expansion", NeedsTransition: false }, true, "or: first"],
+      [OR, { AuditType: "New", NeedsTransition: true }, true, "or: second"],
+      [OR, { AuditType: "Expansion", NeedsTransition: true }, true, "or: both"],
+      [OR, { AuditType: "New", NeedsTransition: false }, false, "or: neither"],
+      [AND, { AuditType: "Expansion", NeedsTransition: true }, true, "and: both"],
+      [AND, { AuditType: "Expansion", NeedsTransition: false }, false, "and: one"],
+      [AND, { AuditType: "New", NeedsTransition: false }, false, "and: neither"],
+      [{ not: A }, { AuditType: "New" }, true, "not: false inside"],
+      [{ not: A }, { AuditType: "Expansion" }, false, "not: true inside"],
+    ];
+    for (const [w, answers, want, why] of rows)
+      if (C.holds(w, answers) !== want)
+        problems.push(`holds ${why}: got ${C.holds(w, answers)}, want ${want}`);
+
+    // 3. read a rule apart and put it back together unchanged
+    for (const [w, why] of [[OR, "or"], [AND, "and"], [A, "one clause"],
+    [null, "always"]]) {
+      const p = C.parts(w);
+      const back = C.build(p.join, p.parts);
+      if (JSON.stringify(back) !== JSON.stringify(w))
+        problems.push(`${why} did not survive the editor: `
+          + `${JSON.stringify(w)} -> ${JSON.stringify(back)}`);
+    }
+    // one clause is written bare, not as a group of one - rules.json is read
+    if (JSON.stringify(C.build("any", [A])) !== JSON.stringify(A))
+      problems.push("a single clause was wrapped in a group");
+    if (C.build("all", [{}, {}]) !== null)
+      problems.push("rows with no field should mean no condition");
+
+    // 4. what the editor CANNOT draw, it must not be able to destroy
+    const nested = { any: [A, { all: [B, A] }] };
+    if (C.parts(nested).ok)
+      problems.push("a nested group was claimed as editable");
+    if (C.parts({ not: A }).ok)
+      problems.push("a `not` was claimed as editable");
+    if (!/advanced/.test(C.text(nested).lab))
+      problems.push("a rule too complex to draw is not labelled as such");
+    if (C.plain(nested) !== JSON.stringify(nested))
+      problems.push("a rule too complex to draw does not show its JSON");
+    console.log("and/or: " + rows.length + " truth-table case(s), "
+      + "4 round trip(s), nested and `not` refused");
   }
 
   // The affordance has to be on the row, or the feature is undiscoverable.

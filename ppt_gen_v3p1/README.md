@@ -101,6 +101,22 @@ that one.
 Drag rows into deck order. Give each slide a condition, or leave it `always`.
 Drag a slide out of the deck to drop it entirely.
 
+**Conditions can be joined with and / or.** Click the condition chip, then
+**+ Add a condition** for as many clauses as the rule needs. A dropdown at the
+top chooses between *all of these are true* and *any one of these is true*, and
+the joining word is repeated down the left of the clauses so the rule reads as
+a list. The row's chip then shows the first clause and counts the rest —
+*"AuditType is Expansion · or 2 more"* — because a chip that showed only the
+first clause would understate the rule.
+
+These are `{"all": [...]}` and `{"any": [...]}` in `rules.json`, which the
+engine has always understood. One clause is written bare rather than as a group
+of one; `rules.json` is meant to be read.
+
+`not`, and a group nested inside a group, are valid in `rules.json` and the
+editor cannot draw them. It says so and refuses to edit that row rather than
+writing something simpler over it — which is what it used to do, silently.
+
 **Click a row to move it by number.** Dragging is fine for ten slides and
 miserable for a hundred, where the target scrolls out of sight before the
 pointer gets there. The row opens a bar saying where it currently sits — *"Our

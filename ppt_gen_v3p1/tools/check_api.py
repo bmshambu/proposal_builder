@@ -236,6 +236,57 @@ def _run():
     r = client.put("/api/libraries/demo/rules", json={"deck": deck})
     check("save keeps what the UI does not edit", r.status_code == 200,
           "saved %d rows unchanged" % len(deck))
+    # ---- and / or, through the API and the engine together
+    #
+    # rules.py has always evaluated {all:[...]} and {any:[...]}; what was never
+    # checked is that such a rule survives the round trip the UI makes on every
+    # save. `when` is typed Any on the way in, so nothing but a check keeps it
+    # that way.
+    or_rules = json.load(open(rules_path, encoding="utf-8"))
+    or_deck = client.get("/api/libraries/demo/rules").json()["deck"]
+    or_id = or_deck[-1]["id"]
+    or_when = {"any": [{"field": "AuditType", "eq": "Expansion of Services"},
+                       {"field": "ClientName", "exists": True}]}
+    or_rows = [dict(row, when=or_when) if row["id"] == or_id else row
+               for row in or_deck]
+    r = client.put("/api/libraries/demo/rules", json={"deck": or_rows})
+    check("an OR rule can be saved through the API", r.status_code == 200,
+          (r.json().get("detail") or "saved")[:52])
+    or_back = client.get("/api/libraries/demo/rules").json()["deck"]
+    check("and comes back exactly as it went in",
+          next(x["when"] for x in or_back if x["id"] == or_id) == or_when,
+          json.dumps(next(x["when"] for x in or_back if x["id"] == or_id))[:54])
+
+    # the engine has to agree with the screen about what that rule means
+    or_cases = [({"AuditType": "Expansion of Services"}, True, "first holds"),
+                ({"ClientName": "Acme"}, True, "second holds"),
+                ({"AuditType": "Expansion of Services", "ClientName": "Acme"},
+                 True, "both hold"),
+                ({"AuditType": "New Audit Client"}, False, "neither holds")]
+    for or_ans, or_want, or_why in or_cases:
+        sel = client.post("/api/libraries/demo/select",
+                          json={"answers": or_ans}).json()
+        got = any(sl["block"] == or_id for sl in sel["slides"])
+        check("OR selects correctly when %s" % or_why, got == or_want,
+              "%s %s" % (or_id, "in" if got else "out"))
+
+    and_when = {"all": [{"field": "AuditType", "eq": "Expansion of Services"},
+                        {"field": "ClientName", "exists": True}]}
+    and_rows = [dict(row, when=and_when) if row["id"] == or_id else row
+                for row in or_deck]
+    client.put("/api/libraries/demo/rules", json={"deck": and_rows})
+    and_got = [any(sl["block"] == or_id for sl in
+                   client.post("/api/libraries/demo/select",
+                               json={"answers": a}).json()["slides"])
+               for a, _w, _y in or_cases]
+    check("AND is the other rule, not the same one",
+          and_got == [False, False, True, False],
+          "in the deck for %d of %d answer sets" % (sum(and_got), len(and_got)))
+
+    # put the rules back before anything else reads them
+    with open(rules_path, "w", encoding="utf-8") as fh:
+        json.dump(or_rules, fh, indent=2)
+
     after = json.load(open(rules_path, encoding="utf-8"))
     for bid, sub in (original.get("blocks") or {}).items():
         if "variant" in sub:

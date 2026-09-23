@@ -106,6 +106,7 @@ const S = {
   fields: {}, presets: [],
   answers: {},
   dirty: false, editing: null, moving: null, built: null,
+  condRows: 1,                        // clause rows drawn in the open editor
   check: { ours: null, templafy: null },
   slides: [], slideAt: 0,        // the built deck, for the viewer
   stage: { pptx: null, pdf: null },   // an import waiting for both its files
@@ -511,23 +512,84 @@ function renderPool() {
     || `<p style="color:var(--muted);font-size:13px">Every slide is in the deck.</p>`;
 }
 
-function condText(when) {
-  if (!when) return { lab: "always", op: "", val: "" };
-  const f = label(when.field);
-  const show = (v) => isDate(when.field) ? humanDate(v) : JSON.stringify(v);
-  if ("exists" in when) return { lab: f, op: "is", val: "answered" };
-  if ("eq" in when) return { lab: f, op: "is", val: show(when.eq) };
-  if ("ne" in when) return { lab: f, op: "is not", val: show(when.ne) };
-  if ("in" in when) return { lab: f, op: "is one of", val: when.in.join(", ") };
-  if ("not_in" in when) return { lab: f, op: "is not one of", val: when.not_in.join(", ") };
+const LEAF_OPS = ["eq", "ne", "in", "not_in", "exists"];
+const isLeaf = (c) => !!c && typeof c === "object" && !Array.isArray(c)
+  && typeof c.field === "string" && LEAF_OPS.some(k => k in c);
+
+/** A condition as the editor thinks of it: one join and a flat list of clauses.
+ *
+ *  rules.py allows shapes these controls cannot draw - a group inside a group,
+ *  and `not`. Those come back `ok: false` so the editor can refuse them. It
+ *  used to do the opposite: `{any: [...]}` has no `field`, so the editor found
+ *  none, drew "always", and wrote null over the author's rule the moment
+ *  anybody pressed Apply. An editor that cannot show a rule must not be able
+ *  to destroy it either.
+ */
+function condParts(when) {
+  if (!when || when === "always") return { join: "all", parts: [], ok: true };
+  if (isLeaf(when)) return { join: "all", parts: [when], ok: true };
+  for (const join of ["all", "any"]) {
+    if (Array.isArray(when[join]) && Object.keys(when).length === 1
+      && when[join].length && when[join].every(isLeaf))
+      return { join, parts: when[join].slice(), ok: true };
+  }
+  return { join: "all", parts: [], ok: false };
+}
+
+/** The inverse. One clause stays a bare condition rather than a group of one:
+ *  rules.json is meant to be read, and {"all": [x]} is noise. Clauses with no
+ *  field are dropped - that is what an unfilled row in the editor is. */
+function partsCond(join, parts) {
+  const real = (parts || []).filter(p => p && p.field);
+  if (!real.length) return null;
+  return real.length === 1 ? real[0] : { [join]: real };
+}
+
+function leafText(w) {
+  const f = label(w.field);
+  const show = (v) => isDate(w.field) ? humanDate(v) : JSON.stringify(v);
+  if ("exists" in w) return { lab: f, op: "is", val: "answered" };
+  if ("eq" in w) return { lab: f, op: "is", val: show(w.eq) };
+  if ("ne" in w) return { lab: f, op: "is not", val: show(w.ne) };
+  if ("in" in w) return { lab: f, op: "is one of", val: w.in.join(", ") };
+  if ("not_in" in w) return { lab: f, op: "is not one of", val: w.not_in.join(", ") };
   return { lab: f, op: "", val: "" };
 }
-const condPlain = (w) => w ? `${w.field} ${condText(w).op} ${condText(w).val}` : "always";
+
+/** The chip on the row. Shows the first clause and counts the rest, with the
+ *  word that joins them - "or 2 more" and "and 2 more" are different rules and
+ *  the row has to say which. */
+function condText(when) {
+  if (!when) return { lab: "always", op: "", val: "", more: "" };
+  const { join, parts, ok } = condParts(when);
+  if (!ok) return { lab: "advanced rule", op: "", val: "", more: "in rules.json" };
+  if (!parts.length) return { lab: "always", op: "", val: "", more: "" };
+  const rest = parts.length - 1;
+  return Object.assign(leafText(parts[0]), {
+    more: rest ? `${join === "any" ? "or" : "and"} ${rest} more` : "",
+  });
+}
+
+const condPlain = (w) => {
+  if (!w) return "always";
+  const { join, parts, ok } = condParts(w);
+  if (!ok) return JSON.stringify(w);
+  const t = parts.map(p => `${p.field} ${leafText(p).op} ${leafText(p).val}`.trim());
+  return t.join(join === "any" ? " or " : " and ") || "always";
+};
 
 /** The same comparison rules.py makes, so a greyed row here means an absent
  *  slide there. It is only a preview: /select is what decides the build. */
 function holds(when) {
-  if (!when) return true;
+  if (!when || when === "always") return true;
+  if (when === "never") return false;
+  // Groups first, and exactly as rules.py orders them. A condition this did
+  // not understand used to fall through to `return true`, so an {any: [...]}
+  // showed as in the deck whatever the answers were - the one thing this
+  // function exists to never do.
+  if (Array.isArray(when.all)) return when.all.every(c => holds(c));
+  if (Array.isArray(when.any)) return when.any.some(c => holds(c));
+  if ("not" in when) return !holds(when.not);
   const v = S.answers[when.field];
   const s = (x) => String(x ?? "").replace(/\s+/g, " ").trim().toLowerCase();
   if ("exists" in when) return (s(v) !== "") === !!when.exists;
@@ -597,6 +659,7 @@ function renderDeck() {
         <span class="lab">${esc(c.lab)}</span>
         ${c.op ? `<span class="op">${esc(c.op)}</span>` : ""}
         ${c.val ? `<span class="val">${esc(c.val)}</span>` : ""}
+        ${c.more ? `<span class="more">${esc(c.more)}</span>` : ""}
       </button>
       <span class="status">${on ? "" : "not in deck"}</span>
       <button class="del" data-del="${esc(row.id)}" title="Remove from the deck">&times;</button>
@@ -679,13 +742,70 @@ function valueControl(field, op, current) {
   return `<input type="text" data-v value="${esc(current ?? "")}" placeholder="value">`;
 }
 
+/** One clause: field, operator, value, and the word joining it to the one
+ *  above. The joiner is spelled out on every row after the first, because the
+ *  difference between "and" and "or" is the whole rule and a dropdown at the
+ *  top is too far away to read while looking at the clauses. */
+function condRowHTML(p, i, n, join) {
+  const field = p.field || "";
+  const op = "exists" in p ? "exists"
+    : (["eq", "ne", "in", "not_in"].find(k => k in p) || "eq");
+  return `<div class="cond-row" data-p="${i}">
+    <span class="joiner">${i === 0 ? "" : (join === "any" ? "or" : "and")}</span>
+    <select data-f style="max-width:320px">
+      <option value=""${field ? "" : " selected"}>${n > 1
+        ? "— pick a field —" : "always — no condition"}</option>
+      ${Object.keys(S.fields).map(f => `<option value="${esc(f)}"${f === field ? " selected" : ""}>${esc(label(f))}${S.fields[f].varies === false ? " (never varies)"
+        : S.fields[f].missing ? ` (in ${S.fields[f].seen} of ${S.fields[f].of})` : ""}</option>`).join("")}
+    </select>
+    ${field ? `<select data-o>${OPERATORS.map(([k, l]) =>
+      `<option value="${k}"${k === op ? " selected" : ""}>${l}</option>`).join("")}</select>` : ""}
+    ${field ? valueControl(field, op, p[op]) : ""}
+    ${n > 1 ? `<button class="del" data-delcond="${i}"
+      title="Remove this condition">&times;</button>` : ""}
+  </div>`;
+}
+
+/** The editor's controls -> {join, parts}.
+ *
+ *  Read back out of the DOM rather than kept in a model beside it. A value
+ *  typed into a box and not yet applied exists only in the DOM, so a second
+ *  copy of this state is a second thing to get wrong - and getting it wrong
+ *  means silently writing a different rule than the one on screen.
+ */
+function readEditor(ed) {
+  const joinEl = ed.querySelector("[data-join]");
+  const parts = [...ed.querySelectorAll(".cond-row")].map(el => {
+    const field = (el.querySelector("[data-f]") || {}).value || "";
+    if (!field) return {};
+    const op = (el.querySelector("[data-o]") || {}).value || "eq";
+    const v = el.querySelector("[data-v]");
+    if (op === "exists") return { field, exists: true };
+    if (op === "in" || op === "not_in")
+      return { field, [op]: String(v ? v.value : "").split(",")
+        .map(x => x.trim()).filter(Boolean) };
+    return { field, [op]: v ? readValue(v) : "" };
+  });
+  return { join: joinEl ? joinEl.value : "all", parts };
+}
+
 function editorHTML(row) {
-  const when = row.when || {};
-  const op = "exists" in when ? "exists"
-    : (["eq", "ne", "in", "not_in"].find(k => k in when) || "eq");
-  const field = when.field || "";
-  const spec = S.fields[field];
+  const { join, parts, ok } = condParts(row.when);
   const names = Object.keys(S.fields);
+  if (!ok)
+    return `<div class="editor">
+      <div class="note warn"><b>This rule is more than these controls can
+        draw.</b> It nests a group inside a group, or uses <code>not</code> —
+        both of which rules.json allows and this editor does not. Editing it
+        here would write something simpler over it, so it is left alone.
+        Change it in <code>rules.json</code>.</div>
+      <div class="full">${esc(JSON.stringify(row.when))}</div>
+      <div class="acts"><button class="btn" data-cancel="1">Close</button></div>
+    </div>`;
+  const shown = parts.slice();
+  while (shown.length < Math.max(1, S.condRows || 1)) shown.push({});
+  const field = (shown[0] || {}).field || "";
+  const spec = S.fields[field];
   if (!names.length)
     return `<div class="editor"><div class="note warn">No answer fields yet.
       Upload a payload on the Build screen first — conditions are chosen from
@@ -694,14 +814,16 @@ function editorHTML(row) {
   return `<div class="editor">
     <div class="line">
       <b style="font-size:12.5px">Include this slide when</b>
-      <select data-f style="max-width:340px">
-        <option value=""${field ? "" : " selected"}>always — no condition</option>
-        ${names.map(f => `<option value="${esc(f)}"${f === field ? " selected" : ""}>${esc(label(f))}${S.fields[f].varies === false ? " (never varies)"
-          : S.fields[f].missing ? ` (in ${S.fields[f].seen} of ${S.fields[f].of})` : ""}</option>`).join("")}
-      </select>
-      ${field ? `<select data-o>${OPERATORS.map(([k, l]) =>
-      `<option value="${k}"${k === op ? " selected" : ""}>${l}</option>`).join("")}</select>` : ""}
-      ${field ? valueControl(field, op, when[op]) : ""}
+      ${shown.length > 1 ? `<select data-join>
+        <option value="all"${join === "all" ? " selected" : ""}>all of these are true</option>
+        <option value="any"${join === "any" ? " selected" : ""}>any one of these is true</option>
+      </select>` : ""}
+    </div>
+    ${shown.map((p, i) => condRowHTML(p, i, shown.length, join)).join("")}
+    <div class="line">
+      <button class="btn sm" data-addcond="1">+ Add a condition</button>
+      ${shown.length > 1 ? `<span class="fld-note">${join === "any"
+        ? "any one of them is enough" : "every one of them must hold"}</span>` : ""}
     </div>
     ${field ? `<div class="full" title="the exact field name written to rules.json">${esc(field)}</div>` : ""}
     ${spec && spec.varies === false
@@ -1708,7 +1830,7 @@ $("goto-go").onclick = gotoSlide;
 $("goto-slide").onkeydown = (e) => { if (e.key === "Enter") gotoSlide(); };
 
 document.addEventListener("click", (e) => {
-  const t = e.target.closest("[data-add],[data-del],[data-edit],[data-cancel],[data-apply],[data-restore],[data-drop],[data-move],[data-move-go],[data-move-cancel],[data-move-input]");
+  const t = e.target.closest("[data-add],[data-del],[data-edit],[data-cancel],[data-apply],[data-addcond],[data-delcond],[data-restore],[data-drop],[data-move],[data-move-go],[data-move-cancel],[data-move-input]");
   if (!t) return;
   // Move-to first: its controls sit inside the bar, and the bar sits next to
   // a row that also answers to [data-move].
@@ -1725,35 +1847,60 @@ document.addEventListener("click", (e) => {
   if (t.dataset.add !== undefined) { S.deck.push({ id: t.dataset.add, when: null }); S.dirty = true; }
   else if (t.dataset.del !== undefined) { S.deck = S.deck.filter(r => r.id !== t.dataset.del); S.dirty = true; }
   else if (t.dataset.edit !== undefined) {
-    S.editing = S.editing === t.dataset.edit ? null : t.dataset.edit; renderDeck(); return;
+    S.editing = S.editing === t.dataset.edit ? null : t.dataset.edit;
+    // How many clause rows to draw. It cannot come from the condition alone:
+    // a row an author has added but not yet filled in holds no clause, so
+    // rebuilding from `when` would make it vanish as they reached for it.
+    const opening = S.deck.find(r => r.id === S.editing);
+    S.condRows = opening ? (condParts(opening.when).parts.length || 1) : 1;
+    renderDeck(); return;
   } else if (t.dataset.cancel !== undefined) { S.editing = null; renderDeck(); return; }
   else if (t.dataset.apply !== undefined) {
     const ed = t.closest(".editor");
-    const field = ed.querySelector("[data-f]").value;
     const row = S.deck.find(r => r.id === t.dataset.apply);
-    if (!field) row.when = null;
-    else {
-      const op = ed.querySelector("[data-o]").value;
-      const v = ed.querySelector("[data-v]");
-      if (op === "exists") row.when = { field, exists: true };
-      else if (op === "in" || op === "not_in")
-        row.when = { field, [op]: v.value.split(",").map(s => s.trim()).filter(Boolean) };
-      else row.when = { field, [op]: readValue(v) };
-    }
+    const { join, parts } = readEditor(ed);
+    row.when = partsCond(join, parts);
     S.editing = null; S.dirty = true;
+  }
+  else if (t.dataset.addcond !== undefined) {
+    const ed = t.closest(".editor");
+    const row = S.deck.find(r => r.id === S.editing);
+    const { join, parts } = readEditor(ed);
+    row.when = partsCond(join, parts);
+    S.condRows = parts.length + 1;
+    renderDeck(); return;
+  }
+  else if (t.dataset.delcond !== undefined) {
+    const ed = t.closest(".editor");
+    const row = S.deck.find(r => r.id === S.editing);
+    const { join, parts } = readEditor(ed);
+    parts.splice(Number(t.dataset.delcond), 1);
+    row.when = partsCond(join, parts);
+    S.condRows = Math.max(1, parts.length);
+    S.dirty = true;
+    renderDeck(); return;
   }
   renderPool(); renderDeck(); renderTest(); renderBuildResult();
 });
 
 document.addEventListener("change", (e) => {
   const t = e.target;
-  if (t.matches("[data-f],[data-o]")) {
+  if (t.matches("[data-f],[data-o],[data-join]")) {
     const ed = t.closest(".editor");
     const row = S.deck.find(r => r.id === S.editing);
-    const field = ed.querySelector("[data-f]").value;
-    const op = (ed.querySelector("[data-o]") || {}).value || "eq";
-    row.when = !field ? null
-      : (op === "exists" ? { field, exists: true } : { field, [op]: "" });
+    const { join, parts } = readEditor(ed);
+    // A new field or a new operator makes the old value meaningless - a date
+    // left over from a text field, or a list left over from `is one of`. Only
+    // the clause that changed is cleared; the others are somebody's work.
+    const rowEl = t.closest(".cond-row");
+    if (rowEl) {
+      const i = Number(rowEl.dataset.p);
+      const field = (rowEl.querySelector("[data-f]") || {}).value || "";
+      const op = (rowEl.querySelector("[data-o]") || {}).value || "eq";
+      parts[i] = !field ? {}
+        : (op === "exists" ? { field, exists: true } : { field, [op]: "" });
+    }
+    row.when = partsCond(join, parts);
     renderDeck();
     return;
   }
