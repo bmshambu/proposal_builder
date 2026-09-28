@@ -1,0 +1,459 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>RFP Answer Pipeline</title>
+<style>
+  /* KPMG palette — exact brand values.
+     Primary  KPMG Blue #00338D · Medium Blue #005EB8 · Light Blue #0091DA
+     Secondary Violet #483698 · Green #00A3A1
+     Neutrals #333333 #555555 #E0E0E0 #F5F5F5 */
+  :root{
+    --paper:#F5F5F5;
+    --surface:#FFFFFF;
+    --ink:#333333;
+    --body:#555555;
+    --line:#E0E0E0;
+    --blue:#00338D;
+    --blue-mid:#005EB8;
+    --blue-light:#0091DA;
+    --violet:#483698;
+    --green:#00A3A1;
+    --zone:#E6EEF8;
+    --zone-line:#B9CDE6;
+    --band-q:#ECEAF6;
+    --band-q-line:#C4BDE2;
+    /* Light Purple, used for nothing else: it marks the one step that is
+       drawn again in close-up, so the two diagrams can be tied together. */
+    --focus:#6D2077;
+    --focus-tint:#F4EAF6;
+    --shadow:0 1px 3px rgba(0,51,141,.07);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      color-scheme:dark;
+      --paper:#0E1219;
+      --surface:#161C26;
+      --ink:#EEF2F8;
+      --body:#AFB9C7;
+      --line:#2B3342;
+      --blue:#4D9DE8;
+      --blue-mid:#0091DA;
+      --blue-light:#57B6EC;
+      --violet:#9B8AE0;
+      --green:#2FC6C4;
+      --zone:#152436;
+      --zone-line:#2C4460;
+      --band-q:#1E1B33;
+      --band-q-line:#3B3560;
+      --focus:#CC8FD8;
+      --focus-tint:#2C1B33;
+      --shadow:0 1px 3px rgba(0,0,0,.45);
+    }
+  }
+  :root[data-theme="dark"]{
+    color-scheme:dark;
+    --paper:#0E1219;
+    --surface:#161C26;
+    --ink:#EEF2F8;
+    --body:#AFB9C7;
+    --line:#2B3342;
+    --blue:#4D9DE8;
+    --blue-mid:#0091DA;
+    --blue-light:#57B6EC;
+    --violet:#9B8AE0;
+    --green:#2FC6C4;
+    --zone:#152436;
+    --zone-line:#2C4460;
+    --band-q:#1E1B33;
+    --band-q-line:#3B3560;
+    --focus:#CC8FD8;
+    --focus-tint:#2C1B33;
+    --shadow:0 1px 3px rgba(0,0,0,.45);
+  }
+
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:Arial,Helvetica,"Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1060px;margin:0 auto;padding-inline:16px;padding-block:32px 56px}
+
+  header{
+    border-top:4px solid var(--blue);
+    padding-top:18px;
+    margin-bottom:28px;
+    display:flex;
+    flex-wrap:wrap;
+    align-items:baseline;
+    gap:6px 18px;
+  }
+  h1{
+    font-size:clamp(1.5rem,4.2vw,2rem);
+    font-weight:700;
+    color:var(--blue);
+    line-height:1.15;
+    margin:0;
+    letter-spacing:-.01em;
+    text-wrap:balance;
+  }
+  .sub{
+    font-size:.94rem;
+    color:var(--body);
+    margin:0;
+    font-variant-numeric:tabular-nums;
+  }
+
+  figure{margin:0 0 30px}
+  .scroller{
+    overflow-x:auto;
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:8px;
+    box-shadow:var(--shadow);
+    padding:8px;
+  }
+  svg{display:block;height:auto;max-width:100%}
+  .flow{min-width:840px}
+  .match{min-width:700px}
+  figcaption{font-size:.88rem;color:var(--body);margin-top:10px;padding-inline:2px}
+
+  .n-title{font-size:14px;font-weight:700;fill:var(--ink)}
+  .n-sub{font-size:12px;fill:var(--body)}
+  .n-num{font-size:12px;font-weight:700;fill:var(--blue-mid);
+    font-variant-numeric:tabular-nums}
+  .n-keep{font-size:12px;font-weight:700;fill:var(--green)}
+  .edge{font-size:12px;fill:var(--body)}
+  .phase{font-size:13px;font-weight:700;fill:var(--blue);letter-spacing:.06em;
+    text-transform:uppercase}
+  .phase-q{font-size:13px;font-weight:700;fill:var(--violet);letter-spacing:.06em;
+    text-transform:uppercase}
+  .zone-lab{font-size:11px;font-weight:700;fill:var(--blue-mid);
+    letter-spacing:.1em;text-transform:uppercase}
+  .box{fill:var(--surface);stroke:var(--line);stroke-width:1.5}
+  .box-zone{fill:var(--surface);stroke:var(--blue-light);stroke-width:2}
+  .box-out{fill:var(--surface);stroke:var(--blue);stroke-width:2.5}
+  .band{fill:none;stroke:var(--line);stroke-width:1.5}
+  .band-q{fill:var(--band-q);opacity:.5;stroke:none}
+  .zonebox{fill:var(--zone);stroke:var(--zone-line);stroke-width:1.5;
+    stroke-dasharray:6 4}
+  .link{stroke:var(--blue-mid);stroke-width:1.8;fill:none}
+  .link-keep{stroke:var(--green);stroke-width:1.8;fill:none;stroke-dasharray:6 4}
+  .cross{stroke:var(--line);stroke-width:2;fill:none;stroke-dasharray:5 4}
+  .circ{fill:var(--blue-mid)}
+  .circ-t{font-size:13px;font-weight:700;fill:#FFFFFF}
+  .box-keep{fill:var(--surface);stroke:var(--green);stroke-width:2}
+  /* the same step, in both drawings */
+  .box-focus{fill:var(--focus-tint);stroke:var(--focus);stroke-width:2.5}
+  .tag{fill:var(--focus-tint);stroke:var(--focus);stroke-width:1.5}
+  .tag-t{font-size:11.5px;font-weight:700;fill:var(--focus);letter-spacing:.03em}
+
+  /* Section rule, after the brand's own coloured-underline section header. */
+  h2{
+    font-size:1.12rem;
+    font-weight:700;
+    color:var(--blue-mid);
+    margin:0 0 14px;
+    padding-bottom:7px;
+    border-bottom:2px solid var(--blue-mid);
+    letter-spacing:-.005em;
+  }
+  section{margin-bottom:34px}
+  .detail{min-width:820px}
+
+  .notes{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
+    gap:18px 26px;
+    margin-top:18px;
+  }
+  .note{border-left:3px solid var(--blue-light);padding-left:14px}
+  .note h3{
+    font-size:.94rem;
+    font-weight:700;
+    color:var(--ink);
+    margin:0 0 5px;
+  }
+  .note p{
+    font-size:.9rem;
+    line-height:1.55;
+    color:var(--body);
+    margin:0;
+    max-width:62ch;
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>RFP Answer Pipeline</h1>
+    <p class="sub">Every figure below is an example, from one live run — 16 questions, 228 seconds</p>
+  </header>
+
+  <section>
+  <h2>End to end</h2>
+  <figure>
+    <div class="scroller">
+      <svg class="flow" viewBox="0 0 1000 1180" role="img"
+           aria-label="End-to-end flowchart in three phases. Phase one, set up the template once: import the deck, name the slides, set the rules, bind the values. Phase two, build a proposal in 3.4 seconds, and the only phase where a deck leaves the tool: answer the questions, the rules choose the slides, the proposal is built at 59 slides, then for rendering and preview the deck goes to SharePoint where Office Online converts it to page images and the uploaded copy is deleted the moment they come back; this step is drawn in full in the second diagram. Phase three, optionally add a Q and A section over two to four minutes in the background: attach the client's RFP with a service line, send it to Springboard which returns 16 questions after 150 seconds, find an answer for each against an answer library of about 1560 approved decks which returns 10 matching decks, then append the answers and draw a linked index. Two files result: a new 77-slide deck holding the proposal plus the Q and A section, and the original 59-slide proposal, left untouched.">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <!-- ================= 1 · SET UP ================= -->
+        <rect class="band" x="20" y="52" width="940" height="140" rx="10"/>
+        <text class="phase" x="38" y="78">1 · Set up the template — once</text>
+
+        <rect class="box" x="44" y="98" width="200" height="72" rx="6"/>
+        <text class="n-title" x="144" y="128" text-anchor="middle">Import the deck</text>
+        <text class="n-sub" x="144" y="150" text-anchor="middle">your PowerPoint library</text>
+
+        <rect class="box" x="270" y="98" width="200" height="72" rx="6"/>
+        <text class="n-title" x="370" y="128" text-anchor="middle">Name the slides</text>
+        <text class="n-sub" x="370" y="150" text-anchor="middle">automatic</text>
+
+        <rect class="box" x="496" y="98" width="200" height="72" rx="6"/>
+        <text class="n-title" x="596" y="128" text-anchor="middle">Set the rules</text>
+        <text class="n-sub" x="596" y="150" text-anchor="middle">when each slide appears</text>
+
+        <rect class="box" x="722" y="98" width="200" height="72" rx="6"/>
+        <text class="n-title" x="822" y="128" text-anchor="middle">Bind the values</text>
+        <text class="n-sub" x="822" y="150" text-anchor="middle">client name, dates, fees</text>
+
+        <g color="var(--blue-mid)">
+          <line class="link" x1="246" y1="134" x2="266" y2="134" marker-end="url(#ar)"/>
+          <line class="link" x1="472" y1="134" x2="492" y2="134" marker-end="url(#ar)"/>
+          <line class="link" x1="698" y1="134" x2="718" y2="134" marker-end="url(#ar)"/>
+          <line class="link" x1="470" y1="194" x2="470" y2="228" marker-end="url(#ar)"/>
+        </g>
+
+        <!-- ================= 2 · BUILD ================= -->
+        <rect class="band" x="20" y="232" width="940" height="310" rx="10"/>
+        <text class="phase" x="38" y="258">2 · Build a proposal — 3.4 s · the only place a deck leaves the tool</text>
+
+        <rect class="box" x="44" y="276" width="264" height="72" rx="6"/>
+        <text class="n-title" x="176" y="306" text-anchor="middle">Answer the questions</text>
+        <text class="n-sub" x="176" y="328" text-anchor="middle">on screen, or upload a payload</text>
+
+        <rect class="box" x="340" y="276" width="264" height="72" rx="6"/>
+        <text class="n-title" x="472" y="306" text-anchor="middle">Rules choose the slides</text>
+        <text class="n-sub" x="472" y="328" text-anchor="middle">and the values are filled in</text>
+
+        <rect class="box" x="636" y="276" width="264" height="72" rx="6"/>
+        <text class="n-title" x="768" y="306" text-anchor="middle">Proposal built</text>
+        <text class="n-num" x="768" y="328" text-anchor="middle">e.g. 59 slides</text>
+
+        <rect class="box-focus" x="44" y="396" width="290" height="92" rx="6"/>
+        <text class="n-title" x="189" y="424" text-anchor="middle">Rendering / Preview</text>
+        <text class="n-sub" x="189" y="446" text-anchor="middle">page images, for the preview only</text>
+        <text class="n-num" x="189" y="468" text-anchor="middle">you download the .pptx, never a PDF</text>
+        <rect class="tag" x="60" y="498" width="258" height="26" rx="13"/>
+        <text class="tag-t" x="189" y="516" text-anchor="middle">drawn in full below ↓</text>
+
+        <!-- the round trip out of the firm's network -->
+        <rect class="zonebox" x="376" y="372" width="420" height="150" rx="10"/>
+        <text class="zone-lab" x="396" y="394">Outside the tool · Microsoft 365</text>
+
+        <rect class="box-zone" x="400" y="404" width="372" height="72" rx="6"/>
+        <text class="n-title" x="586" y="432" text-anchor="middle">SharePoint · Office Online</text>
+        <text class="n-sub" x="586" y="454" text-anchor="middle">converts the deck to page images</text>
+        <text class="n-keep" x="586" y="502" text-anchor="middle">the uploaded copy is deleted the moment they come back</text>
+
+        <g color="var(--blue-mid)">
+          <line class="link" x1="336" y1="422" x2="396" y2="422" marker-end="url(#ar)"/>
+          <line class="link" x1="396" y1="452" x2="336" y2="452" marker-end="url(#ar)"/>
+          <path class="link" d="M 768 350 L 768 364 L 189 364 L 189 392"
+                marker-end="url(#ar)"/>
+          <path class="link" d="M 812 350 L 812 562 L 240 562 L 240 622"
+                marker-end="url(#ar)"/>
+        </g>
+        <text class="edge" x="366" y="414" text-anchor="middle">the deck</text>
+        <text class="edge" x="366" y="470" text-anchor="middle">images</text>
+        <text class="edge" x="526" y="556" text-anchor="middle">if a Q&amp;A section is asked for</text>
+
+        <!-- the original never enters phase 3 -->
+        <g color="var(--green)">
+          <path class="link-keep"
+                d="M 852 350 L 852 366 L 978 366 L 978 1104 L 934 1104"
+                marker-end="url(#ar)"/>
+        </g>
+        <text class="n-keep" x="970" y="358" text-anchor="end">left untouched</text>
+
+        <!-- ================= 3 · Q&A ================= -->
+        <rect class="band-q" x="20" y="586" width="940" height="420" rx="10"/>
+        <rect class="band" x="20" y="586" width="940" height="420" rx="10"/>
+        <text class="phase-q" x="38" y="612">3 · Add a Q&amp;A section — 2–4 min, in the background</text>
+
+        <rect class="box" x="60" y="628" width="340" height="72" rx="6"/>
+        <text class="n-title" x="230" y="658" text-anchor="middle">Attach the client's RFP</text>
+        <text class="n-sub" x="230" y="680" text-anchor="middle">with function line and sub-service line</text>
+
+        <rect class="box" x="60" y="728" width="340" height="68" rx="6"/>
+        <text class="n-title" x="230" y="757" text-anchor="middle">Send it off</text>
+        <text class="n-sub" x="230" y="779" text-anchor="middle">nothing waits on screen</text>
+
+        <rect class="box" x="60" y="824" width="340" height="68" rx="6"/>
+        <text class="n-title" x="230" y="853" text-anchor="middle">Find an answer for each</text>
+        <text class="n-sub" x="230" y="875" text-anchor="middle">closest match, 0.80 or better</text>
+
+        <rect class="box" x="60" y="920" width="340" height="76" rx="6"/>
+        <text class="n-title" x="230" y="948" text-anchor="middle">Append answers, draw the index</text>
+        <text class="n-sub" x="230" y="970" text-anchor="middle">every question linked to its answer</text>
+        <text class="n-num" x="230" y="988" text-anchor="middle">2.5 s</text>
+
+        <rect class="zonebox" x="470" y="700" width="440" height="210" rx="10"/>
+        <text class="zone-lab" x="490" y="722">Outside the tool</text>
+
+        <rect class="box-zone" x="494" y="732" width="392" height="72" rx="6"/>
+        <text class="n-title" x="690" y="760" text-anchor="middle">Springboard</text>
+        <text class="n-sub" x="690" y="782" text-anchor="middle">reads the RFP and lists the questions in it</text>
+
+        <rect class="box-zone" x="494" y="826" width="392" height="72" rx="6"/>
+        <text class="n-title" x="690" y="854" text-anchor="middle">Answer library</text>
+        <text class="n-sub" x="690" y="876" text-anchor="middle">~1,560 approved answer decks</text>
+
+        <g color="var(--blue-mid)">
+          <line class="link" x1="230" y1="702" x2="230" y2="724" marker-end="url(#ar)"/>
+          <line class="link" x1="230" y1="798" x2="230" y2="820" marker-end="url(#ar)"/>
+          <line class="link" x1="230" y1="894" x2="230" y2="916" marker-end="url(#ar)"/>
+          <line class="link" x1="402" y1="750" x2="490" y2="750" marker-end="url(#ar)"/>
+          <line class="link" x1="490" y1="786" x2="402" y2="786" marker-end="url(#ar)"/>
+          <line class="link" x1="402" y1="846" x2="490" y2="846" marker-end="url(#ar)"/>
+          <line class="link" x1="490" y1="882" x2="402" y2="882" marker-end="url(#ar)"/>
+          <line class="link" x1="230" y1="998" x2="230" y2="1060" marker-end="url(#ar)"/>
+        </g>
+        <text class="edge" x="446" y="742" text-anchor="middle">the RFP</text>
+        <text class="edge" x="446" y="778" text-anchor="middle">16 questions, after 150 s</text>
+        <text class="edge" x="446" y="838" text-anchor="middle">each question</text>
+        <text class="edge" x="446" y="874" text-anchor="middle">10 matching decks</text>
+
+        <!-- ================= WHAT COMES OUT ================= -->
+        <rect class="box-out" x="60" y="1064" width="380" height="80" rx="6"/>
+        <text class="n-title" x="250" y="1096" text-anchor="middle">Proposal + Q&amp;A section</text>
+        <text class="n-num" x="250" y="1118" text-anchor="middle">e.g. 77 slides · a new .pptx</text>
+
+        <rect class="box" x="530" y="1064" width="400" height="80" rx="6"/>
+        <text class="n-title" x="730" y="1096" text-anchor="middle">Your original proposal</text>
+        <text class="n-keep" x="730" y="1118" text-anchor="middle">e.g. 59 slides · never modified</text>
+      </svg>
+    </div>
+    <figcaption>A deck leaves the tool once, to be turned into page images for the preview, and the uploaded copy is deleted straight away. What you download is always the PowerPoint file.</figcaption>
+  </figure>
+  </section>
+
+  <section>
+  <h2>Inside the preview: rendering the slides</h2>
+  <figure>
+    <div class="scroller">
+      <svg class="detail" viewBox="0 0 1000 780" role="img"
+           aria-label="The rendering round trip in four steps, continuing from the Rendering and Preview box in the diagram above. It starts with the built proposal: the deck the rules have just produced, 59 slides with every value filled in, a .pptx sitting on our side. Step one, upload the deck into one SharePoint document library, which is the only place the tool can reach. Step two, ask for a PDF: Office Online draws every slide page by page, using the same renderer as PowerPoint, so fonts, charts and branding hold, and returns a PDF of the deck. Step three, delete the copy, always, even if the render failed, so the copy is gone seconds after it arrived. Step four, back on our side, the PDF is turned into one picture per slide and the PDF itself is never shown or kept. The result is the preview on screen: the slides you page through before downloading.">
+        <defs>
+          <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <!-- the same step, marked the same way, in the diagram above -->
+        <rect class="tag" x="40" y="22" width="336" height="28" rx="14"/>
+        <text class="tag-t" x="208" y="41" text-anchor="middle">↑ the “Rendering / Preview” step, in full</text>
+
+        <rect class="box" x="40" y="70" width="380" height="82" rx="6"/>
+        <text class="n-title" x="230" y="98" text-anchor="middle">The built proposal</text>
+        <text class="n-sub" x="230" y="119" text-anchor="middle">the deck the rules have just produced —</text>
+        <text class="n-sub" x="230" y="139" text-anchor="middle">e.g. 59 slides, every value filled in, a .pptx</text>
+
+        <!-- everything in this box happens on Microsoft's side -->
+        <rect class="zonebox" x="520" y="158" width="440" height="352" rx="10"/>
+        <text class="zone-lab" x="548" y="182">Outside the tool · Microsoft 365</text>
+
+        <!-- 1 · upload -->
+        <rect class="box" x="40" y="190" width="380" height="68" rx="6"/>
+        <circle class="circ" cx="76" cy="220" r="14"/>
+        <text class="circ-t" x="76" y="225" text-anchor="middle">1</text>
+        <text class="n-title" x="104" y="218">Upload the deck</text>
+        <text class="n-sub" x="104" y="240">into one document library</text>
+
+        <rect class="box-zone" x="548" y="190" width="384" height="68" rx="6"/>
+        <text class="n-title" x="740" y="218" text-anchor="middle">SharePoint</text>
+        <text class="n-sub" x="740" y="240" text-anchor="middle">one library, and nothing else</text>
+
+        <!-- 2 · render -->
+        <rect class="box" x="40" y="296" width="380" height="78" rx="6"/>
+        <circle class="circ" cx="76" cy="328" r="14"/>
+        <text class="circ-t" x="76" y="333" text-anchor="middle">2</text>
+        <text class="n-title" x="104" y="324">Ask for a PDF</text>
+        <text class="n-sub" x="104" y="346">every slide is drawn as a picture,</text>
+        <text class="n-sub" x="104" y="366">page by page</text>
+
+        <rect class="box-zone" x="548" y="296" width="384" height="78" rx="6"/>
+        <text class="n-title" x="740" y="324" text-anchor="middle">Office Online</text>
+        <text class="n-sub" x="740" y="346" text-anchor="middle">the same renderer as PowerPoint</text>
+        <text class="n-sub" x="740" y="366" text-anchor="middle">fonts, charts and branding hold</text>
+
+        <!-- 3 · delete -->
+        <rect class="box" x="40" y="412" width="380" height="68" rx="6"/>
+        <circle class="circ" cx="76" cy="442" r="14"/>
+        <text class="circ-t" x="76" y="447" text-anchor="middle">3</text>
+        <text class="n-title" x="104" y="440">Delete the copy</text>
+        <text class="n-sub" x="104" y="462">always — even if the render failed</text>
+
+        <rect class="box-keep" x="548" y="412" width="384" height="68" rx="6"/>
+        <text class="n-title" x="740" y="440" text-anchor="middle">The copy is gone</text>
+        <text class="n-keep" x="740" y="462" text-anchor="middle">seconds after it arrived</text>
+
+        <!-- 4 · back on our side -->
+        <rect class="box" x="40" y="518" width="380" height="78" rx="6"/>
+        <circle class="circ" cx="76" cy="550" r="14"/>
+        <text class="circ-t" x="76" y="555" text-anchor="middle">4</text>
+        <text class="n-title" x="104" y="546">Turn the PDF into pictures</text>
+        <text class="n-sub" x="104" y="568">one per slide, on our side —</text>
+        <text class="n-sub" x="104" y="588">the PDF is never shown or kept</text>
+
+        <rect class="box-focus" x="40" y="634" width="380" height="82" rx="6"/>
+        <text class="n-title" x="230" y="662" text-anchor="middle">The preview on screen</text>
+        <text class="n-sub" x="230" y="683" text-anchor="middle">the slides you page through</text>
+        <text class="n-num" x="230" y="704" text-anchor="middle">Download still gives you the .pptx</text>
+
+        <g color="var(--blue-mid)">
+          <line class="link" x1="230" y1="154" x2="230" y2="186" marker-end="url(#ar3)"/>
+          <line class="link" x1="230" y1="260" x2="230" y2="292" marker-end="url(#ar3)"/>
+          <line class="link" x1="230" y1="376" x2="230" y2="408" marker-end="url(#ar3)"/>
+          <line class="link" x1="230" y1="482" x2="230" y2="514" marker-end="url(#ar3)"/>
+          <line class="link" x1="230" y1="598" x2="230" y2="630" marker-end="url(#ar3)"/>
+          <line class="link" x1="422" y1="224" x2="544" y2="224" marker-end="url(#ar3)"/>
+          <line class="link" x1="422" y1="320" x2="544" y2="320" marker-end="url(#ar3)"/>
+          <line class="link" x1="544" y1="352" x2="422" y2="352" marker-end="url(#ar3)"/>
+          <line class="link" x1="422" y1="446" x2="544" y2="446" marker-end="url(#ar3)"/>
+        </g>
+        <text class="edge" x="483" y="216" text-anchor="middle">the .pptx</text>
+        <text class="edge" x="483" y="312" text-anchor="middle">convert this file</text>
+        <text class="edge" x="483" y="344" text-anchor="middle">a PDF of the deck</text>
+        <text class="edge" x="483" y="438" text-anchor="middle">delete it</text>
+      </svg>
+    </div>
+    <figcaption>Steps 1 to 3 are one round trip, over in a couple of seconds. Step 4 happens on our side, and is what you actually look at.</figcaption>
+
+    <div class="notes">
+      <div class="note">
+        <h3>Why does it go to SharePoint at all?</h3>
+        <p>Office Online will only convert a file that is already sitting in a
+          library — there is no way to hand it the bytes directly. That is the
+          whole reason for the upload, and the whole reason for the delete.</p>
+      </div>
+      <div class="note">
+        <h3>Why a PDF, and not the PowerPoint file itself?</h3>
+        <p>A browser cannot display a .pptx, so the slides have to become
+          pictures. PowerPoint itself cannot be run on a server, and installing
+          a third-party converter on firm machines is not permitted — which
+          leaves Office Online, the same engine PowerPoint uses, so fonts,
+          charts and branding come out right. The PDF is only a step on the way
+          to those pictures: nobody sees it, nothing keeps it, and the file you
+          download is still the .pptx.</p>
+      </div>
+    </div>
+  </figure>
+  </section>
+</div>
+
+</body></html>
