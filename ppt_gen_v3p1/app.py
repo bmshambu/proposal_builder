@@ -962,7 +962,14 @@ def build_slides(token: str,
     path = build_path(token)
 
     why = None
-    if engine in ("auto", "library"):
+    # The library shortcut is what `auto` means when nothing else is asked for:
+    # cut the pages out of the library PDF and never render anything. But it
+    # sits in front of every other renderer, so with a library.pdf present
+    # PPTGEN_RENDERER=graph did nothing at all - the only way to reach Graph
+    # was to delete the PDF, which also breaks the checks that read it. A named
+    # preference is a name, and it belongs ahead of the shortcut.
+    prefers = os.environ.get("PPTGEN_RENDERER") or "auto"
+    if engine == "library" or (engine == "auto" and prefers == "auto"):
         name, pages, titles, missing = build_pages(token)
         try:
             if missing:

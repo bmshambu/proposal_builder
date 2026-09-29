@@ -17,6 +17,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -124,7 +125,14 @@ def _no_network(*_args, **_kwargs):
 def main():
     from engine import graph as graphmod
 
-    graph_env = {k: os.environ.pop(k, None) for k in graphmod.ENV}
+    # The demo switches go out with the credentials, and for the same reason.
+    # They are somebody's .env, not the suite's: GRAPH_DEMO_HOLD=30 turns every
+    # fake render into a thirty-second sleep, and the library-PDF imports alone
+    # made the run long enough to be killed half-way - which is how a run ended
+    # up deleting templates/demo/library.pdf and not putting it back.
+    graph_env = {k: os.environ.pop(k, None)
+                 for k in graphmod.ENV + ("GRAPH_DEMO_HOLD", "GRAPH_KEEP_UPLOAD",
+                                          "PPTGEN_RENDERER")}
     wire = graphmod._wire
     graphmod._wire = _no_network
     try:
@@ -835,6 +843,114 @@ def _run():
               not fake.auth_leaked_to("download.aspx")
               and not fake.auth_leaked_to("uploadSession"),
               "%d request(s) inspected" % len(fake.requests))
+
+        # ---- the demo hold: a switch that must not become a way to leave
+        #      decks behind
+        # Both switches are already out of the environment for the whole run -
+        # see main(). These set and clear them deliberately.
+        check("no hold unless somebody asks for one",
+              graphmod.demo_hold() == 0, "GRAPH_DEMO_HOLD unset")
+        for raw, want, why in (("20", 20.0, "a plain value is taken"),
+                               ("600", float(graphmod.HOLD_MAX),
+                                "a mistyped 600 is capped, not obeyed"),
+                               ("-5", 0.0, "a negative is no hold"),
+                               ("soon", 0.0, "nonsense is no hold, not a crash"),
+                               ("", 0.0, "empty is no hold")):
+            os.environ["GRAPH_DEMO_HOLD"] = raw
+            check("hold: %s" % why, graphmod.demo_hold() == want,
+                  "%r -> %s" % (raw, graphmod.demo_hold()))
+        os.environ.pop("GRAPH_DEMO_HOLD", None)
+
+        # The hold sits inside the try, so the finally still fires. If it ever
+        # moved outside it, the deck would stay in SharePoint for good - which
+        # is the whole thing this file exists to prevent.
+        graphmod.forget_apps()
+        fake = FakeGraph(pdf=deck_pdf)
+        graphmod.TRANSPORT = fake
+        os.environ["GRAPH_DEMO_HOLD"] = "1"
+        held = time.time()
+        r = client.get("/api/builds/%s/slides?engine=graph" % fresh_build())
+        held = time.time() - held
+        os.environ.pop("GRAPH_DEMO_HOLD", None)
+        check("a held render still deletes, and still purges",
+              r.status_code == 200 and fake.deleted and not fake.bin,
+              "%.1fs, bin holds %d" % (held, len(fake.bin)))
+        check("and the hold is the delay, not a no-op", held >= 1,
+              "%.1fs for a 1s hold" % held)
+
+        # ---- the cache must not serve one engine's work as another's
+        #
+        # Found while trying to show somebody the SharePoint round trip: the
+        # deck had already been drawn by PowerPoint, so asking for graph
+        # returned PowerPoint's images, nothing was uploaded, and the screen
+        # said "graph". Four renderers are only worth having if you can hold
+        # two of them up against each other on the same deck.
+        graphmod.forget_apps()
+        fake = FakeGraph(pdf=deck_pdf)
+        graphmod.TRANSPORT = fake
+        eng_token = fresh_build()
+        first = client.get("/api/builds/%s/slides?engine=powerpoint" % eng_token)
+        if first.status_code == 200:
+            again = client.get("/api/builds/%s/slides?engine=graph" % eng_token)
+            check("asking for a different engine re-renders, not re-serves",
+                  again.status_code == 200
+                  and again.json().get("engine") == "graph" and fake.deleted,
+                  "powerpoint then graph -> %s" % again.json().get("engine"))
+            back = client.get("/api/builds/%s/slides?engine=graph" % eng_token)
+            check("and asking for the same one again is still cached",
+                  back.status_code == 200
+                  and back.json().get("engine") == "graph",
+                  "no second round trip")
+        else:
+            check("asking for a different engine re-renders, not re-serves",
+                  True, "skipped: PowerPoint is not on this machine")
+
+        # PPTGEN_RENDERER is how a deployment - or a demo - names the renderer
+        # without every caller passing ?engine=.
+        graphmod.forget_apps()
+        fake = FakeGraph(pdf=deck_pdf)
+        graphmod.TRANSPORT = fake
+        os.environ["PPTGEN_RENDERER"] = "graph"
+        r = client.get("/api/builds/%s/slides" % fresh_build())
+        os.environ.pop("PPTGEN_RENDERER", None)
+        check("PPTGEN_RENDERER=graph makes a plain preview use graph",
+              r.status_code == 200 and r.json().get("engine") == "graph",
+              "engine=%s, uploaded=%s" % (r.json().get("engine"), fake.deleted))
+
+        # ---- GRAPH_KEEP_UPLOAD: the off switch for the delete
+        #
+        # This is the one setting that undoes what this whole module is for, so
+        # what is checked is not that it works - it is that it cannot come on
+        # by accident, and that it is loud when it does.
+        check("nothing is kept unless somebody asks for it",
+              not graphmod.keep_upload(), "GRAPH_KEEP_UPLOAD unset")
+        for raw, want in (("1", True), ("true", True), ("YES", True),
+                          ("on", True), ("0", False), ("off", False),
+                          ("", False), ("maybe", False), (" ", False)):
+            os.environ["GRAPH_KEEP_UPLOAD"] = raw
+            check("keep: %r means %s" % (raw, "keep" if want else "delete"),
+                  graphmod.keep_upload() == want, "")
+        os.environ.pop("GRAPH_KEEP_UPLOAD", None)
+
+        graphmod.forget_apps()
+        fake = FakeGraph(pdf=deck_pdf)
+        graphmod.TRANSPORT = fake
+        os.environ["GRAPH_KEEP_UPLOAD"] = "1"
+        r = client.get("/api/builds/%s/slides?engine=graph" % fresh_build())
+        os.environ.pop("GRAPH_KEEP_UPLOAD", None)
+        check("with keep on, the render still works and the copy stays",
+              r.status_code == 200 and not fake.deleted,
+              "deleted=%s" % fake.deleted)
+
+        # and the moment it is unset, the guarantee is back - no lingering
+        # state, no client instance remembering it was in demo mode
+        graphmod.forget_apps()
+        fake = FakeGraph(pdf=deck_pdf)
+        graphmod.TRANSPORT = fake
+        r = client.get("/api/builds/%s/slides?engine=graph" % fresh_build())
+        check("and unsetting it restores the delete, same process",
+              r.status_code == 200 and fake.deleted and not fake.bin,
+              "deleted=%s, bin holds %d" % (fake.deleted, len(fake.bin)))
 
         # ---- and the delete is not conditional on any of that working
         graphmod.forget_apps()

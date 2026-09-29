@@ -293,7 +293,7 @@ def preview_from_library(pdf, pages, out_dir, width=WIDTH):
         raise RenderError(why)
 
     with _lock_for(out_dir):
-        hit = _cached(out_dir, pdf, pages)
+        hit = _cached(out_dir, pdf, pages, engine="library")
         if hit:
             return "library", hit
         _clear(out_dir)
@@ -486,12 +486,19 @@ def engines():
 
 
 # ---------------------------------------------------------------- the cache
-def _cached(out_dir, source, pages=None):
+def _cached(out_dir, source, pages=None, engine=None):
     """Paths from a previous export, if they still describe this source.
 
     `pages` matters for the library backend: the same folder would otherwise
     serve a cached preview of a different slide selection after a library was
     re-imported and the pages moved.
+
+    `engine` matters because the whole point of having four of them is being
+    able to hold two up against each other. The cache compared the file and
+    the pages but not the renderer, so once PowerPoint had drawn a deck, asking
+    for graph handed back PowerPoint's images and the render never happened -
+    no upload, no SharePoint, nothing to compare, and a screen that cheerfully
+    named the wrong engine.
     """
     try:
         with open(os.path.join(out_dir, _DONE), "r", encoding="utf-8") as fh:
@@ -499,6 +506,8 @@ def _cached(out_dir, source, pages=None):
         if note.get("source_size") != os.path.getsize(source):
             return None
         if list(note.get("pages") or []) != list(pages or []):
+            return None
+        if engine and note.get("engine") != engine:
             return None
         paths = [os.path.join(out_dir, n) for n in note.get("files", [])]
         return paths if paths and all(os.path.exists(p) for p in paths) else None
@@ -550,9 +559,12 @@ def deck_to_images(pptx, out_dir, width=WIDTH, backend=None):
         raise RenderError(why or "no image renderer is available here")
 
     with _lock_for(out_dir):               # this deck converts once, not per viewer
-        hit = _cached(out_dir, pptx)
+        # `name`, not `backend`: a cache drawn by whatever auto settled on last
+        # time is still a hit when auto settles on the same one now, and a miss
+        # when it does not.
+        hit = _cached(out_dir, pptx, engine=name)
         if hit:
-            return cached_engine(out_dir) or name, hit
+            return name, hit
         _clear(out_dir)
         paths = BACKENDS[name][1](pptx, out_dir, width)
         if not paths:

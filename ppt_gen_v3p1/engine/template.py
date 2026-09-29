@@ -362,9 +362,18 @@ def import_deck(src_pptx, root, name=None, description="", overwrite=False,
             # The deck is being replaced, so the PDF cut from it is stale by
             # definition - it would preview the slides that just went away.
             # Everything else in the folder is the author's and stays.
-            for entry in os.listdir(folder):
-                if entry.lower().endswith((".pptx", ".pdf")):
-                    os.remove(os.path.join(folder, entry))
+            #
+            # Named exactly, not matched by extension. "every .pptx and .pdf in
+            # the folder" reads the same until somebody keeps a second deck or
+            # a reference PDF beside their library, and then a re-import eats
+            # it. The old code deleted the whole folder, so this is not a
+            # regression - but it is the kind of thing nobody notices until the
+            # file they wanted is gone.
+            stale = _read_json(os.path.join(folder, MANIFEST), {}) or {}
+            for entry in (stale.get("library") or LIBRARY, LIBRARY, "library.pdf"):
+                doomed = os.path.join(folder, entry)
+                if os.path.isfile(doomed):
+                    os.remove(doomed)
     if not os.path.isdir(folder):
         os.makedirs(folder)
 

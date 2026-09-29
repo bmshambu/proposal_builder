@@ -232,6 +232,20 @@ def cmd_check(args):
     say("folder  %s" % client.folder)
     say("secret  set (%d characters, not shown)"
         % len(os.environ.get("GRAPH_CLIENT_SECRET") or ""))
+    # Said here because this is where somebody checks the configuration, and a
+    # hold left switched on is the one setting that leaves a deck in a client's
+    # SharePoint. It should be a surprise to see this line.
+    hold = graph.demo_hold()
+    if hold:
+        say("HOLD    GRAPH_DEMO_HOLD is ON - every render leaves the deck in")
+        say("        %s for %.0fs before deleting it. Demo decks only; unset"
+            % (client.folder, hold))
+        say("        it before anyone renders a client's proposal.")
+    if graph.keep_upload():
+        say("KEEP    GRAPH_KEEP_UPLOAD is ON - NOTHING IS BEING DELETED.")
+        say("        Every render, including a client's proposal, leaves its")
+        say("        deck in %s until somebody removes it." % client.folder)
+        say("        Unset it, then run: python tools/graph_setup.py sweep --delete")
     say("")
 
     began = time.time()

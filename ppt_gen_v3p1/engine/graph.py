@@ -41,6 +41,14 @@ Configuration is environment only:
     GRAPH_DRIVE_ID       the one document library this is allowed to touch
     GRAPH_FOLDER         a folder within it, default `pptgen-render`, so a
                          human can see at a glance whether anything was left
+    GRAPH_DEMO_HOLD      seconds to leave the deck there before deleting it, so
+                         somebody can watch it arrive and go. Off unless set,
+                         capped at 60, announced on stderr every time, and for
+                         the demo deck only - never a client's.
+    GRAPH_KEEP_UPLOAD    do not delete at all: leave the copy in SharePoint for
+                         a human to look at, and to remove with `sweep
+                         --delete`. This turns off the guarantee the rest of
+                         this file is built around. Demo decks only.
 """
 import json
 import os
@@ -56,6 +64,14 @@ BETA = RESOURCE + "/beta"          # only for the recycle bin; see purge()
 ENV = ("GRAPH_TENANT_ID", "GRAPH_CLIENT_ID", "GRAPH_CLIENT_SECRET",
        "GRAPH_DRIVE_ID")
 FOLDER = "pptgen-render"
+
+# The upload and the delete are about two seconds apart, which is too fast for
+# anyone to watch. GRAPH_DEMO_HOLD widens that window on purpose, for showing a
+# person the deck arrive in the folder and go again. Capped, because every
+# second of hold is a second a deck is sitting in SharePoint - and because a
+# hold survives an exception, the delete being in a `finally`, but not the
+# process being killed.
+HOLD_MAX = 60
 
 # Graph's documented ceiling for a plain PUT. Over it the upload has to be a
 # session, and the session's chunks must be a multiple of 320 KiB - that is not
@@ -219,6 +235,7 @@ class Client(object):
         self._send = send or transport()
         self._token = None
         self.journal = []                # (method, path) - the checks read it
+        self.kept = []                   # copies left behind on purpose
 
     # ------------------------------------------------------------ plumbing
     def _request(self, method, url, headers=None, body=None, auth=True):
@@ -473,12 +490,88 @@ class Client(object):
                                uuid.uuid4().hex[:12])
         item = self.upload(pptx, name)
         try:
-            return self.convert(item)
+            pdf = self.convert(item)
+            # Inside the `try`, so the delete below still runs. Only ever
+            # non-zero when somebody set GRAPH_DEMO_HOLD; see `demo_hold`.
+            hold = demo_hold()
+            if hold:
+                _hold(hold, name)
+            return pdf
         finally:
-            self.delete(item, name)
+            # Still a `finally`, and still the last word on this deck - but
+            # what it does is now a setting, which is the one thing this
+            # module was written not to allow. With GRAPH_KEEP_UPLOAD on, the
+            # deletion is deferred to a human running `sweep --delete`, and
+            # until they do, the copy is readable by anyone who can open the
+            # library. Off is the default and should stay that way.
+            if keep_upload():
+                self.kept.append(name)
+                _kept(name)
+            else:
+                self.delete(item, name)
 
 
 # ---------------------------------------------------------------- helpers
+def demo_hold():
+    """Seconds to leave the uploaded deck in SharePoint. -> float, 0 normally.
+
+    Zero unless somebody deliberately set `GRAPH_DEMO_HOLD`, and never more
+    than HOLD_MAX however large the value is: a mistyped 600 is a deck sitting
+    in a client's SharePoint for ten minutes, and the person who typed it will
+    have walked away. Anything unparseable is nothing, not an error - a demo
+    switch must never be the reason a preview fails.
+    """
+    raw = (os.environ.get("GRAPH_DEMO_HOLD") or "").strip()
+    if not raw:
+        return 0.0
+    try:
+        return max(0.0, min(float(raw), float(HOLD_MAX)))
+    except ValueError:
+        return 0.0
+
+
+def keep_upload():
+    """True when the uploaded copy is to be left in SharePoint. False normally.
+
+    This switches off the one guarantee this module exists to make, so it is
+    deliberately awkward to turn on by accident: only an explicit 1/true/yes/on
+    counts, and anything else - including "0", "off" and a typo - is False.
+
+    It is for one thing: showing somebody the deck in the library, with time to
+    open it, rather than the two seconds a render actually takes. GRAPH_DEMO_HOLD
+    is the gentler way to do that and needs no cleaning up afterwards; this one
+    does. The copy is not deleted, it is *deferred* - `graph_setup.py sweep
+    --delete` is what finishes the job, and it looks in the recycle bin too.
+
+    Demo decks only. While this is on, a client's proposal rendered by anybody
+    is left in SharePoint until a human removes it.
+    """
+    return (os.environ.get("GRAPH_KEEP_UPLOAD") or "").strip().lower() \
+        in ("1", "true", "yes", "on")
+
+
+def _kept(name):
+    """Say, loudly, that a deck was left behind on purpose."""
+    import sys
+    print("GRAPH_KEEP_UPLOAD: %s was NOT deleted - it is still in SharePoint. "
+          "Run `python tools/graph_setup.py sweep --delete` when you are done."
+          % name, file=sys.stderr, flush=True)
+
+
+def _hold(seconds, name):
+    """Wait, and say so where somebody will see it.
+
+    This file logs nothing, deliberately - but an unattended hold is the one
+    thing here that leaves a confidential file somewhere it should not be, so
+    it announces itself every single time. The name it prints is the uploaded
+    copy's, which is a random string and a deck's file name, never a secret.
+    """
+    import sys
+    print("GRAPH_DEMO_HOLD: leaving %s in SharePoint for %.0fs before "
+          "deleting it" % (name, seconds), file=sys.stderr, flush=True)
+    time.sleep(seconds)
+
+
 def _path_of(url):
     """Just the path, for the journal. Query strings carry credentials."""
     from urllib.parse import urlsplit
